@@ -36,3 +36,33 @@ class StateMergeTest(TestCase):
         )
 
         self.assertEqual(["a", "b"], list(merged))
+
+    def test_merge_manual_fields_uses_previous_title_if_generated_title_is_missing(self):
+        merged = merge_manual_fields(
+            {
+                "data_type": "dataset",
+                "verification_flags": ["open"],
+                "title": None,
+            },
+            {
+                "data_type": "dataset",
+                "verification_flags": ["open"],
+                "title": "Previous title",
+            },
+        )
+
+        self.assertEqual("Previous title", merged["title"])
+
+    def test_merge_state_file_uses_data_id_as_final_title_fallback(self):
+        merged = merge_state_file(
+            {
+                "esacci.TEST": {
+                    "data_type": "dataset",
+                    "verification_flags": ["open"],
+                    "title": "",
+                }
+            },
+            None,
+        )
+
+        self.assertEqual("esacci.TEST", merged["esacci.TEST"]["title"])

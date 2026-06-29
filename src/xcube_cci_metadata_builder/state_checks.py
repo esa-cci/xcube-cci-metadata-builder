@@ -1,0 +1,376 @@
+"""Live checks for xcube-cci state generation."""
+
+from __future__ import annotations
+
+import random
+import signal
+import traceback
+from contextlib import contextmanager
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Any, Iterator
+
+from .constants import DATASET, DATATREE, GEODATAFRAME, VECTORDATACUBE
+from .result_store import BuilderResult
+
+TIMEOUT_SECONDS = 120
+
+
+class CheckTimeoutError(TimeoutError):
+    """Raised when a single check exceeds its timeout."""
+
+
+@dataclass(frozen=True)
+class CheckConfig:
+    """Configuration for one live data check."""
+
+    timeout_seconds: int = TIMEOUT_SECONDS
+    random_seed: int = 42
+
+
+@contextmanager
+def timeout(seconds: int) -> Iterator[None]:
+    """Limit one operation using ``SIGALRM`` where available."""
+
+    if seconds <= 0 or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def alarm_handler(signum, frame):
+        raise CheckTimeoutError(f"Time out after {seconds} seconds.")
+
+    previous_handler = signal.signal(signal.SIGALRM, alarm_handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
+
+def check_data_id(
+    store: Any,
+    data_id: str,
+    data_type: str,
+    config: CheckConfig | None = None,
+) -> BuilderResult:
+    """Check one data ID and return a persistable builder result."""
+
+    config = config or CheckConfig()
+    try:
+        checker = _get_checker(data_type)
+        state_entry = checker(store, data_id, config)
+        return BuilderResult(
+            data_id=data_id,
+            data_type=data_type,
+            status="ok",
+            state_entry=state_entry,
+        )
+    except Exception as exception:
+        return BuilderResult(
+            data_id=data_id,
+            data_type=data_type,
+            status="error",
+            error={
+                "type": type(exception).__name__,
+                "message": str(exception),
+                "traceback": traceback.format_exc(),
+            },
+        )
+
+
+def _get_checker(data_type: str):
+    if data_type == GEODATAFRAME:
+        return _check_geodataframe
+    if data_type == VECTORDATACUBE:
+        return _check_vectordatacube
+    if data_type in (DATASET, DATATREE):
+        return _check_dataset_like
+    raise ValueError(f"Unsupported data type: {data_type!r}")
+
+
+def _check_dataset_like(
+    store: Any, data_id: str, config: CheckConfig
+) -> dict[str, Any]:
+    descriptor = store.describe_data(data_id=data_id)
+    data_type = _descriptor_data_type(descriptor)
+    open_params = _get_common_open_params(descriptor, config)
+    flags: list[str] = []
+
+    with timeout(config.timeout_seconds):
+        data = store.open_data(data_id, **open_params)
+    try:
+        data_for_checks = _as_dataset(data)
+        _assert_requested_variables(data_for_checks, open_params.get("variable_names", []))
+        flags.append("open")
+
+        time_range = get_array_time_range(descriptor, data_for_checks)
+        if time_range is not None:
+            params = dict(open_params)
+            params["time_range"] = time_range
+            with timeout(config.timeout_seconds):
+                temporal_data = store.open_data(data_id, **params)
+            _assert_requested_variables(
+                _as_dataset(temporal_data), params.get("variable_names", [])
+            )
+            flags.append("constrain_time")
+
+        region = get_region(descriptor, config)
+        if region is not None:
+            params = dict(open_params)
+            params["bbox"] = region
+            with timeout(config.timeout_seconds):
+                spatial_data = store.open_data(data_id, **params)
+            _assert_requested_variables(
+                _as_dataset(spatial_data), params.get("variable_names", [])
+            )
+            flags.append("constrain_region")
+    finally:
+        close = getattr(data, "close", None)
+        if close is not None:
+            close()
+
+    return {
+        "data_type": data_type,
+        "verification_flags": flags,
+        "title": _get_title(descriptor, store, data_id),
+    }
+
+
+def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
+    descriptor = store.describe_data(data_id=data_id, data_type=VECTORDATACUBE)
+    open_params = _get_common_open_params(descriptor, config)
+    with timeout(config.timeout_seconds):
+        data = store.open_data(data_id, **open_params)
+    close = getattr(data, "close", None)
+    if close is not None:
+        close()
+    return {
+        "data_type": VECTORDATACUBE,
+        "verification_flags": ["open"],
+        "title": _get_title(descriptor, store, data_id),
+    }
+
+
+def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
+    descriptor = store.describe_data(data_id=data_id, data_type=GEODATAFRAME)
+    open_params = _get_geodataframe_open_params(descriptor, config)
+    flags: list[str] = []
+
+    with timeout(config.timeout_seconds):
+        gdf = store.open_data(data_id, **open_params)
+    flags.append("open")
+
+    time_range = get_geodataframe_time_range(descriptor)
+    if time_range is not None:
+        params = dict(open_params)
+        params["time_range"] = time_range
+        with timeout(config.timeout_seconds):
+            gdf = store.open_data(data_id, **params)
+        flags.append("constrain_time")
+
+    region = get_geodataframe_region(gdf, descriptor)
+    if region is not None:
+        params = dict(open_params)
+        params["bbox"] = region
+        with timeout(config.timeout_seconds):
+            store.open_data(data_id, **params)
+        flags.append("constrain_region")
+
+    flags.append("write_geojson")
+    return {
+        "data_type": GEODATAFRAME,
+        "verification_flags": flags,
+        "title": _get_title(descriptor, store, data_id),
+    }
+
+
+def _get_common_open_params(descriptor: Any, config: CheckConfig) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    variable_names = _choose_variables(
+        list((getattr(descriptor, "data_vars", None) or {}).keys()),
+        config,
+    )
+    if variable_names:
+        params["variable_names"] = variable_names
+    properties = getattr(getattr(descriptor, "open_params_schema", None), "properties", {})
+    place_names = properties.get("place_names") if properties else None
+    if place_names is not None:
+        params["place_names"] = [place_names.items.enum[0]]
+    return params
+
+
+def _get_geodataframe_open_params(descriptor: Any, config: CheckConfig) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    feature_schema = descriptor.feature_schema.to_dict()
+    variable_names = list(feature_schema.get("properties", {}).keys())
+    for coord_name in ("geometry", "time", "lat", "lon", "latitude", "longitude"):
+        if coord_name in variable_names:
+            variable_names.remove(coord_name)
+    variable_names = _choose_variables(variable_names, config)
+    if variable_names:
+        params["variable_names"] = variable_names
+    properties = getattr(getattr(descriptor, "open_params_schema", None), "properties", {})
+    place_names = properties.get("place_names") if properties else None
+    if place_names is not None:
+        params["place_names"] = [place_names.items.enum[0]]
+    return params
+
+
+def _choose_variables(variable_names: list[str], config: CheckConfig) -> list[str]:
+    if len(variable_names) > 3:
+        randomizer = random.Random(config.random_seed)
+        return randomizer.sample(variable_names, k=min(2, len(variable_names)))
+    return list(variable_names)
+
+
+def get_array_time_range(descriptor: Any, data: Any) -> tuple[str, str] | None:
+    descriptor_range = getattr(descriptor, "time_range", None)
+    dims = getattr(descriptor, "dims", None)
+    time_period = getattr(descriptor, "time_period", None)
+    if (
+        descriptor_range is not None
+        and dims is not None
+        and dims.get("time", 0) > 2
+        and time_period is not None
+    ):
+        time_value = int(time_period[:-1])
+        time_unit = time_period[-1]
+        if time_unit == "M":
+            time_unit = "D"
+            time_value *= 31
+        elif time_unit == "Y":
+            time_unit = "D"
+            time_value *= 366
+        time_start = _parse_date(descriptor_range[0])
+        time_end = time_start + _to_timedelta(time_value, time_unit)
+        return _format_date(time_start), _format_date(time_end)
+
+    time_name = None
+    if "time" in data:
+        time_name = "time"
+    elif "t" in data:
+        time_name = "t"
+    if time_name is None:
+        return None
+    start_time = data[time_name][0].values
+    end_time_index = min(2, len(data[time_name]) - 1)
+    end_time = data[time_name][end_time_index].values
+    return _format_date(start_time), _format_date(end_time)
+
+
+def get_geodataframe_time_range(descriptor: Any) -> tuple[str, str] | None:
+    time_range = getattr(descriptor, "time_range", None)
+    if not time_range:
+        return None
+    time_start = _parse_date(time_range[0])
+    time_end = _parse_date(time_range[-1])
+    center_time = time_start + (time_end - time_start) / 2
+    five_days = timedelta(days=5)
+    return (
+        _format_date(center_time - five_days),
+        _format_date(center_time + five_days),
+    )
+
+
+def get_region(descriptor: Any, config: CheckConfig) -> list[float] | None:
+    bbox = getattr(descriptor, "bbox", None)
+    if bbox is None:
+        return None
+    spatial_res = getattr(descriptor, "spatial_res", None) or 1.0
+    minx = float(bbox[0])
+    miny = float(bbox[1])
+    maxx = float(bbox[2]) - spatial_res * 2.0
+    maxy = float(bbox[3]) - spatial_res * 2.0
+    if maxx <= minx or maxy <= miny:
+        return None
+    randomizer = random.Random(config.random_seed)
+    x = randomizer.uniform(minx, maxx)
+    y = randomizer.uniform(miny, maxy)
+    return [
+        float(f"{x:.5f}"),
+        float(f"{y:.5f}"),
+        float(f"{x + spatial_res * 2.0:.5f}"),
+        float(f"{y + spatial_res * 2.0:.5f}"),
+    ]
+
+
+def get_geodataframe_region(gdf: Any, descriptor: Any) -> list[float] | None:
+    if gdf is not None and "geometry" in getattr(gdf, "columns", []):
+        minx, miny, maxx, maxy = gdf.geometry.total_bounds
+    else:
+        bbox = getattr(descriptor, "bbox", None)
+        if bbox is None:
+            return None
+        minx, miny, maxx, maxy = bbox
+    width = (maxx - minx) / 2
+    return [minx, miny, maxx - width, maxy]
+
+
+def _as_dataset(data: Any) -> Any:
+    if hasattr(data, "children") and hasattr(data, "get"):
+        keys = list(data.keys())
+        if keys:
+            return data.get(keys[0]).to_dataset()
+    return data
+
+
+def _assert_requested_variables(data: Any, variable_names: list[str]) -> None:
+    if not variable_names:
+        return
+    data_vars = getattr(data, "data_vars", {})
+    present = [var_name for var_name in variable_names if var_name in data_vars]
+    if not present:
+        raise ValueError(f"Requested variables {variable_names!r} are not in dataset.")
+
+
+def _descriptor_data_type(descriptor: Any) -> str:
+    data_type = getattr(descriptor, "data_type", None)
+    alias = getattr(data_type, "alias", data_type)
+    if alias in (DATASET, DATATREE, GEODATAFRAME, VECTORDATACUBE):
+        return alias
+    return str(alias)
+
+
+def _get_title(descriptor: Any, store: Any = None, data_id: str | None = None) -> str | None:
+    attrs = getattr(descriptor, "attrs", None) or {}
+    title = attrs.get("title")
+    if title:
+        return title
+    if store is not None and data_id is not None and hasattr(store, "get_title"):
+        try:
+            return store.get_title(data_id) or None
+        except Exception:
+            return None
+    return None
+
+
+def _format_date(value: Any) -> str:
+    return _parse_date(value).strftime("%Y-%m-%d")
+
+
+def _parse_date(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time())
+    if hasattr(value, "isoformat"):
+        value = value.isoformat()
+    text = str(value)
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    return datetime.fromisoformat(text[:10])
+
+
+def _to_timedelta(value: int, unit: str) -> timedelta:
+    if unit == "D":
+        return timedelta(days=value)
+    if unit == "h":
+        return timedelta(hours=value)
+    if unit == "m":
+        return timedelta(minutes=value)
+    if unit == "s":
+        return timedelta(seconds=value)
+    raise ValueError(f"Unsupported time period unit: {unit!r}")

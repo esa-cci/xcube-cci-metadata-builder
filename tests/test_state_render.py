@@ -52,3 +52,38 @@ class StateRenderTest(TestCase):
             self.assertTrue((output_dir / "datatree_states.json").is_file())
             self.assertTrue((output_dir / "geodataframe_states.json").is_file())
             self.assertTrue((output_dir / "vectordatacube_states.json").is_file())
+
+    def test_render_state_files_uses_previous_title_when_generated_title_is_missing(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            previous_dir = tmp_path / "previous"
+            output_dir = tmp_path / "out"
+            results = ResultStore(tmp_path / "results")
+            data_id = "esacci.TEST"
+            _write_json(
+                previous_dir / "dataset_states.json",
+                {
+                    data_id: {
+                        "data_type": "dataset",
+                        "verification_flags": ["open"],
+                        "title": "Previous title",
+                    }
+                },
+            )
+            results.write_result(
+                BuilderResult(
+                    data_id=data_id,
+                    data_type="dataset",
+                    status="ok",
+                    state_entry={
+                        "data_type": "dataset",
+                        "verification_flags": ["open"],
+                        "title": None,
+                    },
+                )
+            )
+
+            render_state_files(results, previous_dir, output_dir)
+
+            rendered = json.loads((output_dir / "dataset_states.json").read_text())
+            self.assertEqual("Previous title", rendered[data_id]["title"])

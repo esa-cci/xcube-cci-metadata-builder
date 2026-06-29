@@ -19,6 +19,8 @@ def merge_manual_fields(
     merged = deepcopy(dict(generated_entry))
     if not previous_entry:
         return merged
+    if not merged.get("title") and previous_entry.get("title"):
+        merged["title"] = deepcopy(previous_entry["title"])
     for field in manual_fields:
         if field in previous_entry:
             merged[field] = deepcopy(previous_entry[field])
@@ -37,4 +39,7 @@ def merge_state_file(
         data_id: merge_manual_fields(entry, previous_states.get(data_id), manual_fields)
         for data_id, entry in generated_states.items()
     }
+    for data_id, entry in merged.items():
+        if not entry.get("title"):
+            entry["title"] = data_id
     return dict(sorted(merged.items()))
