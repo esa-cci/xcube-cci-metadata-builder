@@ -160,6 +160,11 @@ def _render_states(args: argparse.Namespace) -> int:
 def _run_checks(args: argparse.Namespace) -> int:
     from xcube.core.store import new_data_store
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     store = new_data_store(args.store_id)
     summary = run_state_checks(
         store=store,

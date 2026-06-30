@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable
 
 from .state_checks import CheckConfig, check_data_id
 from .constants import DATA_TYPES
 from .result_store import ResultStore
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,12 +39,20 @@ def run_state_checks(
 
     for data_type in data_types:
         ids_for_type = list(data_ids) if data_ids is not None else store.list_data_ids(data_type=data_type)
-        for data_id in ids_for_type:
+        total = len(ids_for_type)
+        for index, data_id in enumerate(ids_for_type, start=1):
             if limit is not None and checked >= limit:
                 return RunSummary(checked=checked, skipped=skipped, errors=errors)
             if resume and result_store.has_result(data_type, data_id):
                 skipped += 1
                 continue
+            LOG.info(
+                "Checking %s data ID %s/%s: %s",
+                data_type,
+                index,
+                total,
+                data_id,
+            )
             result = check_data_id(store, data_id, data_type, config)
             result_store.write_result(result)
             checked += 1
