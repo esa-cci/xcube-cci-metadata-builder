@@ -9,9 +9,15 @@ description = "Build metadata artifacts for xcube-cci-registry"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
+dependencies = [
+    "esa-climate-toolbox",
+    "xcube",
+    "xcube-cci",
+]
 
 [project.scripts]
 xcube-cci-metadata-builder = "xcube_cci_metadata_builder.cli:main"
+cci-meta = "xcube_cci_metadata_builder.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
