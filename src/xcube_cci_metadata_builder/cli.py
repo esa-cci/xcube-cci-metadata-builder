@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
+from textwrap import dedent
 
 from .state_checks import CheckConfig
 from .constants import DATA_TYPES
@@ -26,10 +28,40 @@ def _add_render_states_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "render-states",
         help="render xcube-cci state files from persisted per-data-ID results",
+        description=(
+            "Render dataset_states.json, datatree_states.json, "
+            "geodataframe_states.json, and vectordatacube_states.json from "
+            "persisted per-data-ID result files."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta render-states \\
+                --results-dir work/results \\
+                --previous-states-dir ../xcube-cci/xcube_cci/data \\
+                --output-dir ../xcube-cci-registry/states
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--results-dir", required=True, type=Path)
-    parser.add_argument("--previous-states-dir", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument(
+        "--results-dir",
+        required=True,
+        type=Path,
+        help="directory containing per-data-ID result JSON files",
+    )
+    parser.add_argument(
+        "--previous-states-dir",
+        required=True,
+        type=Path,
+        help="directory containing existing *_states.json files for curated fields",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="directory where rendered *_states.json files will be written",
+    )
     parser.set_defaults(func=_render_states)
 
 
@@ -37,27 +69,79 @@ def _add_run_checks_parser(subparsers: argparse._SubParsersAction) -> None:
     parser = subparsers.add_parser(
         "run-checks",
         help="run live xcube-cci checks and persist per-data-ID results",
+        description=(
+            "Run live xcube-cci ODP checks and write one result JSON per data "
+            "ID. Existing result files are skipped by default so interrupted "
+            "runs can be resumed."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta run-checks --results-dir work/results
+
+              cci-meta run-checks \\
+                --results-dir work/results \\
+                --data-types geodataframe
+
+              cci-meta run-checks \\
+                --results-dir work/results \\
+                --data-types dataset,datatree \\
+                --limit 10
+
+              cci-meta run-checks \\
+                --results-dir work/results \\
+                --data-id esacci.AEROSOL.5-days.L3C.AEX.GOMOS.Envisat.AERGOM.3-00.r1
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--store-id", default="esa-cci")
-    parser.add_argument("--results-dir", required=True, type=Path)
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci",
+        help="xcube data store ID to check (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        required=True,
+        type=Path,
+        help="directory where per-data-ID result JSON files will be written",
+    )
     parser.add_argument(
         "--data-types",
         type=_parse_data_types,
         default=DATA_TYPES,
-        help="comma-separated data types to check",
+        metavar="TYPES",
+        help=(
+            "comma-separated data types to check; choices: "
+            "dataset, datatree, geodataframe, vectordatacube "
+            "(default: all)"
+        ),
     )
     parser.add_argument(
         "--data-id",
         dest="data_ids",
         action="append",
-        help="specific data ID to check; may be supplied multiple times",
+        metavar="ID",
+        help=(
+            "specific data ID to check; may be supplied multiple times; "
+            "when set, listing all data IDs is skipped"
+        ),
     )
-    parser.add_argument("--limit", type=int)
-    parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="maximum number of data IDs to check, useful for trial runs",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=120,
+        help="timeout in seconds for each live operation (default: %(default)s)",
+    )
     parser.add_argument(
         "--no-resume",
         action="store_true",
-        help="re-check data IDs even if a result file already exists",
+        help="re-check data IDs even if result files already exist",
     )
     parser.set_defaults(func=_run_checks)
 
@@ -93,7 +177,19 @@ def _run_checks(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="xcube-cci-metadata-builder")
+    parser = argparse.ArgumentParser(
+        prog="cci-meta",
+        description="Build xcube-cci-registry metadata artifacts.",
+        epilog=dedent(
+            """\
+            common commands:
+              cci-meta run-checks --results-dir work/results --limit 10
+              cci-meta run-checks --results-dir work/results --data-types geodataframe
+              cci-meta render-states --results-dir work/results --previous-states-dir ../xcube-cci/xcube_cci/data --output-dir ../xcube-cci-registry/states
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_run_checks_parser(subparsers)
     _add_render_states_parser(subparsers)
