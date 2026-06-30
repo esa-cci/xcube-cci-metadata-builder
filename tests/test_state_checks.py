@@ -1,5 +1,10 @@
 from unittest import TestCase
 
+import geopandas as gpd
+import pandas as pd
+import xarray as xr
+from shapely.geometry import Point
+
 from xcube_cci_metadata_builder.state_checks import (
     CheckConfig,
     _choose_variables,
@@ -8,6 +13,9 @@ from xcube_cci_metadata_builder.state_checks import (
     check_data_id,
     get_geodataframe_time_range,
     get_region,
+    write_kml,
+    write_to_local_store,
+    write_zarr,
 )
 
 
@@ -97,3 +105,62 @@ class StateChecksTest(TestCase):
 
         self.assertEqual("error", result.status)
         self.assertEqual("RuntimeError", result.error["type"])
+
+    def test_write_to_local_store_uses_ect_store(self):
+        data = xr.Dataset({"a": ("x", [1, 2])})
+
+        write_to_local_store(data, "esacci.TEST", ".zarr", "zarr")
+
+    def test_write_zarr_uses_local_ect_store(self):
+        data = xr.Dataset({"a": ("x", [1, 2])})
+
+        write_zarr(data, "esacci.TEST")
+
+    def test_write_kml_uses_local_ect_store(self):
+        data = gpd.GeoDataFrame(
+            pd.DataFrame({"value": [1]}),
+            geometry=[Point(0.0, 0.0)],
+            crs="EPSG:4326",
+        )
+
+        write_kml(data, "esacci.TEST")
+
+    def test_dataset_check_adds_write_zarr_flag(self):
+        class Descriptor:
+            data_type = "dataset"
+            data_vars = {"a": object()}
+            attrs = {"title": "Dataset"}
+
+        class Store:
+            def describe_data(self, data_id, data_type=None):
+                return Descriptor()
+
+            def open_data(self, data_id, **open_params):
+                return xr.Dataset({"a": ("x", [1, 2])})
+
+        result = check_data_id(
+            Store(), "esacci.TEST", "dataset", CheckConfig(timeout_seconds=0)
+        )
+
+        self.assertEqual("ok", result.status)
+        self.assertIn("write_zarr", result.state_entry["verification_flags"])
+
+    def test_local_store_write_failure_returns_error_result(self):
+        class Descriptor:
+            data_type = "dataset"
+            data_vars = {"a": object()}
+            attrs = {"title": "Dataset"}
+
+        class Store:
+            def describe_data(self, data_id, data_type=None):
+                return Descriptor()
+
+            def open_data(self, data_id, **open_params):
+                return object()
+
+        result = check_data_id(
+            Store(), "esacci.TEST", "dataset", CheckConfig(timeout_seconds=0)
+        )
+
+        self.assertEqual("error", result.status)
+        self.assertIn(result.error["type"], {"DataStoreError", "TypeError", "ValueError"})

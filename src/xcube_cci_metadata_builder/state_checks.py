@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import random
+import re
 import signal
+import tempfile
 import traceback
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -14,6 +16,8 @@ from .constants import DATASET, DATATREE, GEODATAFRAME, VECTORDATACUBE
 from .result_store import BuilderResult
 
 TIMEOUT_SECONDS = 120
+_SAFE_NAME_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
+_KML_ACCESSOR_REGISTERED = False
 
 
 class CheckTimeoutError(TimeoutError):
@@ -125,6 +129,10 @@ def _check_dataset_like(
                 _as_dataset(spatial_data), params.get("variable_names", [])
             )
             flags.append("constrain_region")
+
+        with timeout(config.timeout_seconds):
+            write_zarr(data, data_id)
+        flags.append("write_zarr")
     finally:
         close = getattr(data, "close", None)
         if close is not None:
@@ -142,12 +150,18 @@ def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict
     open_params = _get_common_open_params(descriptor, config)
     with timeout(config.timeout_seconds):
         data = store.open_data(data_id, **open_params)
-    close = getattr(data, "close", None)
-    if close is not None:
-        close()
+    flags = ["open"]
+    try:
+        with timeout(config.timeout_seconds):
+            write_zarr(data, data_id)
+        flags.append("write_zarr")
+    finally:
+        close = getattr(data, "close", None)
+        if close is not None:
+            close()
     return {
         "data_type": VECTORDATACUBE,
-        "verification_flags": ["open"],
+        "verification_flags": flags,
         "title": _get_title(descriptor, store, data_id),
     }
 
@@ -177,7 +191,9 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> dict[s
             store.open_data(data_id, **params)
         flags.append("constrain_region")
 
-    flags.append("write_geojson")
+    with timeout(config.timeout_seconds):
+        write_kml(gdf, data_id)
+    flags.append("write_kml")
     return {
         "data_type": GEODATAFRAME,
         "verification_flags": flags,
@@ -322,6 +338,70 @@ def _assert_requested_variables(data: Any, variable_names: list[str]) -> None:
     present = [var_name for var_name in variable_names if var_name in data_vars]
     if not present:
         raise ValueError(f"Requested variables {variable_names!r} are not in dataset.")
+
+
+def write_zarr(data: Any, data_id: str) -> None:
+    """Write *data* to a temporary local ECT store as Zarr."""
+
+    write_to_local_store(data, data_id, suffix=".zarr", format_id="zarr")
+
+
+def write_kml(data: Any, data_id: str) -> None:
+    """Write *data* to a temporary local ECT store as KML."""
+
+    write_to_local_store(data, data_id, suffix=".kml", format_id="kml")
+
+
+def write_to_local_store(
+    data: Any,
+    data_id: str,
+    suffix: str,
+    format_id: str | None = None,
+) -> None:
+    """Write *data* to a temporary local ECT file store."""
+
+    local_data_id = f"{_safe_name(data_id)}{suffix}"
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        if format_id == "kml":
+            _ensure_ect_kml_accessor_registered()
+        from esa_climate_toolbox.core.ds import (
+            add_local_store,
+            get_store,
+            remove_store,
+            write_data,
+        )
+
+        store_id = add_local_store(root=tmp_dir, max_depth=3, persist=False)
+        try:
+            written_id = write_data(
+                data=data,
+                data_id=local_data_id,
+                store_id=store_id,
+                format_id=format_id,
+            )
+            if not get_store(store_id).has_data(written_id):
+                raise RuntimeError(
+                    f"Local ECT store did not report written data {written_id!r}."
+                )
+        finally:
+            remove_store(store_id, persist=False)
+
+
+def _ensure_ect_kml_accessor_registered() -> None:
+    global _KML_ACCESSOR_REGISTERED
+    if _KML_ACCESSOR_REGISTERED:
+        return
+
+    from esa_climate_toolbox.ds.geodataframe import GeoDataFrameKmlFsDataAccessor
+    from xcube.core.store.fs.registry import register_fs_data_accessor_class
+
+    register_fs_data_accessor_class(GeoDataFrameKmlFsDataAccessor)
+    _KML_ACCESSOR_REGISTERED = True
+
+
+def _safe_name(data_id: str) -> str:
+    safe_name = _SAFE_NAME_PATTERN.sub("_", data_id).strip("._")
+    return safe_name or "data"
 
 
 def _descriptor_data_type(descriptor: Any) -> str:

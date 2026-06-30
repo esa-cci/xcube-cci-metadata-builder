@@ -2,14 +2,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
+import xarray as xr
 from xcube_cci_metadata_builder.result_store import ResultStore
+import xcube_cci_metadata_builder.run_state_checks as run_state_checks_module
 from xcube_cci_metadata_builder.run_state_checks import run_state_checks
 
 
 class _Descriptor:
-    data_type = "vectordatacube"
+    data_type = "dataset"
     data_vars = {"mass": object()}
-    attrs = {"title": "Vector test"}
+    attrs = {"title": "Dataset test"}
 
 
 class _FakeStore:
@@ -21,10 +23,10 @@ class _FakeStore:
 
     def describe_data(self, data_id, data_type=None):
         return _Descriptor()
-        self.opened.append((data_id, open_params))
 
     def open_data(self, data_id, **open_params):
-        return object()
+        self.opened.append((data_id, open_params))
+        return xr.Dataset({"mass": ("x", [1, 2])})
 
 
 class RunStateChecksTest(TestCase):
@@ -36,12 +38,12 @@ class RunStateChecksTest(TestCase):
             summary = run_state_checks(
                 store=store,
                 result_store=result_store,
-                data_types=("vectordatacube",),
+                data_types=("dataset",),
             )
             resumed = run_state_checks(
                 store=store,
                 result_store=result_store,
-                data_types=("vectordatacube",),
+                data_types=("dataset",),
             )
 
             self.assertEqual(2, summary.checked)
@@ -61,7 +63,7 @@ class RunStateChecksTest(TestCase):
             summary = run_state_checks(
                 store=store,
                 result_store=ResultStore(Path(tmp_dir)),
-                data_types=("vectordatacube",),
+                data_types=("dataset",),
                 data_ids=("explicit-id",),
             )
 
@@ -75,9 +77,24 @@ class RunStateChecksTest(TestCase):
             summary = run_state_checks(
                 store=store,
                 result_store=result_store,
-                data_types=("vectordatacube",),
+                data_types=("dataset",),
                 limit=1,
             )
 
             self.assertEqual(1, summary.checked)
             self.assertEqual(1, len(list(result_store.iter_results())))
+
+    def test_run_state_checks_logs_current_data_id(self):
+        with TemporaryDirectory() as tmp_dir:
+            with self.assertLogs(run_state_checks_module.LOG, level="INFO") as cm:
+                run_state_checks(
+                    store=_FakeStore(),
+                    result_store=ResultStore(Path(tmp_dir)),
+                    data_types=("dataset",),
+                    limit=1,
+                )
+
+            self.assertIn(
+                "Checking dataset data ID 1/2: id-1",
+                cm.output[0],
+            )
