@@ -32,6 +32,7 @@ class BuilderResult:
     data_type: str
     status: str
     state_entry: dict[str, Any] | None = None
+    descriptor: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,6 +43,8 @@ class BuilderResult:
         }
         if self.state_entry is not None:
             value["state_entry"] = self.state_entry
+        if self.descriptor is not None:
+            value["descriptor"] = self.descriptor
         if self.error is not None:
             value["error"] = self.error
         return value
@@ -53,6 +56,7 @@ class BuilderResult:
             data_type=value["data_type"],
             status=value["status"],
             state_entry=value.get("state_entry"),
+            descriptor=value.get("descriptor"),
             error=value.get("error"),
         )
 

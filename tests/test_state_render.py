@@ -158,3 +158,43 @@ class StateRenderTest(TestCase):
             rendered = json.loads((output_dir / "dataset_states.json").read_text())
             self.assertEqual(["open"], rendered[data_id]["verification_flags"])
             self.assertEqual("Previous title", rendered[data_id]["title"])
+
+    def test_render_state_files_can_write_descriptors_from_results(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            previous_dir = tmp_path / "previous"
+            output_dir = tmp_path / "out"
+            descriptors_dir = tmp_path / "descriptors"
+            results = ResultStore(tmp_path / "results")
+            data_id = "esacci.TEST"
+            descriptor = {
+                "data_type": "dataset",
+                "attrs": {"title": "Descriptor title"},
+            }
+            results.write_result(
+                BuilderResult(
+                    data_id=data_id,
+                    data_type="dataset",
+                    status="ok",
+                    state_entry={
+                        "data_type": "dataset",
+                        "verification_flags": ["open"],
+                        "title": "Descriptor title",
+                    },
+                    descriptor=descriptor,
+                )
+            )
+
+            render_state_files(
+                results,
+                previous_dir,
+                output_dir,
+                descriptors_dir=descriptors_dir,
+            )
+
+            descriptor_files = list(descriptors_dir.glob("*.json"))
+            self.assertEqual(1, len(descriptor_files))
+            self.assertEqual(
+                descriptor,
+                json.loads(descriptor_files[0].read_text(encoding="utf-8")),
+            )

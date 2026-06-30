@@ -39,7 +39,8 @@ def _add_render_states_parser(subparsers: argparse._SubParsersAction) -> None:
               cci-meta render-states \\
                 --results-dir work/results \\
                 --previous-states-dir ../xcube-cci/xcube_cci/data \\
-                --output-dir ../xcube-cci-registry/states
+                --output-dir ../xcube-cci-registry/states \\
+                --descriptors-dir ../xcube-cci-registry/descriptors/esa-cci
             """
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -61,6 +62,14 @@ def _add_render_states_parser(subparsers: argparse._SubParsersAction) -> None:
         required=True,
         type=Path,
         help="directory where rendered *_states.json files will be written",
+    )
+    parser.add_argument(
+        "--descriptors-dir",
+        type=Path,
+        help=(
+            "optional directory where descriptor JSON files from the same "
+            "builder results will be written"
+        ),
     )
     parser.set_defaults(func=_render_states)
 
@@ -151,6 +160,7 @@ def _render_states(args: argparse.Namespace) -> int:
         result_store=ResultStore(args.results_dir),
         previous_states_dir=args.previous_states_dir,
         output_dir=args.output_dir,
+        descriptors_dir=args.descriptors_dir,
     )
     for data_type, path in written.items():
         print(f"{data_type}: {path}")

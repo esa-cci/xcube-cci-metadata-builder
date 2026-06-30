@@ -31,6 +31,7 @@ class ResultStoreTest(TestCase):
                     "verification_flags": ["open"],
                     "title": "Test",
                 },
+                descriptor={"data_type": "dataset", "data_id": "esacci.TEST"},
             )
 
             path = store.write_result(result)

@@ -156,6 +156,12 @@ class StateChecksTest(TestCase):
             data_vars = {"a": object()}
             attrs = {"title": "Dataset"}
 
+            def to_dict(self):
+                return {
+                    "data_type": "dataset",
+                    "attrs": {"title": "Dataset"},
+                }
+
         class Store:
             def describe_data(self, data_id, data_type=None):
                 return Descriptor()
@@ -169,6 +175,10 @@ class StateChecksTest(TestCase):
 
         self.assertEqual("ok", result.status)
         self.assertIn("write_zarr", result.state_entry["verification_flags"])
+        self.assertEqual(
+            {"data_type": "dataset", "attrs": {"title": "Dataset"}},
+            result.descriptor,
+        )
 
     def test_dataset_write_uses_local_subset(self):
         class Descriptor:
@@ -223,6 +233,12 @@ class StateChecksTest(TestCase):
             bbox = [0.0, 0.0, 10.0, 10.0]
             spatial_res = 1.0
 
+            def to_dict(self):
+                return {
+                    "data_type": "dataset",
+                    "attrs": {"title": "Dataset"},
+                }
+
         class Store:
             def __init__(self):
                 self.open_params = []
@@ -243,6 +259,10 @@ class StateChecksTest(TestCase):
 
         self.assertEqual("error", result.status)
         self.assertEqual("RuntimeError", result.error["type"])
+        self.assertEqual(
+            {"data_type": "dataset", "attrs": {"title": "Dataset"}},
+            result.descriptor,
+        )
         self.assertEqual(
             ["open", "constrain_region", "write_zarr"],
             result.state_entry["verification_flags"],

@@ -12,7 +12,9 @@ The first implementation focus is the generation of xcube-cci state files:
 Builder runs are expected to be long and failure-prone, so intermediate results
 are persisted per data ID. Final state files are rendered from those persisted
 results and merged with manually curated fields from existing xcube-cci state
-files.
+files. The same per-data-ID results may also carry descriptors from
+`describe_data()`, which can be rendered into the registry descriptor cache
+together with the matching state update.
 
 ## CLI
 
@@ -100,7 +102,8 @@ Render state files from persisted per-data-ID result files:
 cci-meta render-states \
   --results-dir work/results \
   --previous-states-dir ../xcube-cci/xcube_cci/data \
-  --output-dir ../xcube-cci-registry/states
+  --output-dir ../xcube-cci-registry/states \
+  --descriptors-dir ../xcube-cci-registry/descriptors/esa-cci
 ```
 
 The render step preserves these curated fields from previous states:

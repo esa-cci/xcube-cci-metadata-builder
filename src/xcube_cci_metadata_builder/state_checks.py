@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Iterator
 
 from .constants import DATASET, DATATREE, GEODATAFRAME, VECTORDATACUBE
+from .descriptors import descriptor_to_dict
 from .result_store import BuilderResult
 
 TIMEOUT_SECONDS = 120
@@ -27,9 +28,15 @@ class CheckTimeoutError(TimeoutError):
 class CheckFailedError(Exception):
     """Raised after one or more non-fatal check steps failed."""
 
-    def __init__(self, state_entry: dict[str, Any], errors: list[dict[str, Any]]):
+    def __init__(
+        self,
+        state_entry: dict[str, Any],
+        errors: list[dict[str, Any]],
+        descriptor: dict[str, Any] | None = None,
+    ):
         self.state_entry = state_entry
         self.errors = errors
+        self.descriptor = descriptor
         first_error = errors[0] if errors else {}
         super().__init__(first_error.get("message", "Check failed."))
 
@@ -40,6 +47,14 @@ class CheckConfig:
 
     timeout_seconds: int = TIMEOUT_SECONDS
     random_seed: int = 42
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    """Successful live check data before it is persisted."""
+
+    state_entry: dict[str, Any]
+    descriptor: dict[str, Any] | None = None
 
 
 @contextmanager
@@ -73,12 +88,13 @@ def check_data_id(
     config = config or CheckConfig()
     try:
         checker = _get_checker(data_type)
-        state_entry = checker(store, data_id, config)
+        check_result = checker(store, data_id, config)
         return BuilderResult(
             data_id=data_id,
             data_type=data_type,
             status="ok",
-            state_entry=state_entry,
+            state_entry=check_result.state_entry,
+            descriptor=check_result.descriptor,
         )
     except CheckFailedError as exception:
         first_error = exception.errors[0] if exception.errors else {}
@@ -87,6 +103,7 @@ def check_data_id(
             data_type=data_type,
             status="error",
             state_entry=exception.state_entry,
+            descriptor=exception.descriptor,
             error={
                 "type": first_error.get("type", type(exception).__name__),
                 "message": first_error.get("message", str(exception)),
@@ -128,8 +145,9 @@ def _check_error(check_name: str, exception: Exception) -> dict[str, Any]:
 
 def _check_dataset_like(
     store: Any, data_id: str, config: CheckConfig
-) -> dict[str, Any]:
+) -> CheckResult:
     descriptor = store.describe_data(data_id=data_id)
+    serialized_descriptor = descriptor_to_dict(descriptor)
     data_type = _descriptor_data_type(descriptor)
     open_params = _get_common_open_params(descriptor, config)
     flags: list[str] = []
@@ -197,12 +215,15 @@ def _check_dataset_like(
         "title": _get_title(descriptor, store, data_id),
     }
     if errors:
-        raise CheckFailedError(state_entry, errors)
-    return state_entry
+        raise CheckFailedError(state_entry, errors, serialized_descriptor)
+    return CheckResult(state_entry=state_entry, descriptor=serialized_descriptor)
 
 
-def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
+def _check_vectordatacube(
+    store: Any, data_id: str, config: CheckConfig
+) -> CheckResult:
     descriptor = store.describe_data(data_id=data_id, data_type=VECTORDATACUBE)
+    serialized_descriptor = descriptor_to_dict(descriptor)
     open_params = _get_common_open_params(descriptor, config)
     with timeout(config.timeout_seconds):
         data = store.open_data(data_id, **open_params)
@@ -224,12 +245,13 @@ def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict
         "title": _get_title(descriptor, store, data_id),
     }
     if errors:
-        raise CheckFailedError(state_entry, errors)
-    return state_entry
+        raise CheckFailedError(state_entry, errors, serialized_descriptor)
+    return CheckResult(state_entry=state_entry, descriptor=serialized_descriptor)
 
 
-def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
+def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> CheckResult:
     descriptor = store.describe_data(data_id=data_id, data_type=GEODATAFRAME)
+    serialized_descriptor = descriptor_to_dict(descriptor)
     open_params = _get_geodataframe_open_params(descriptor, config)
     flags: list[str] = []
     errors: list[dict[str, Any]] = []
@@ -274,8 +296,8 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> dict[s
         "title": _get_title(descriptor, store, data_id),
     }
     if errors:
-        raise CheckFailedError(state_entry, errors)
-    return state_entry
+        raise CheckFailedError(state_entry, errors, serialized_descriptor)
+    return CheckResult(state_entry=state_entry, descriptor=serialized_descriptor)
 
 
 def _get_common_open_params(descriptor: Any, config: CheckConfig) -> dict[str, Any]:
