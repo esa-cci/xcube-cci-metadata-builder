@@ -87,3 +87,74 @@ class StateRenderTest(TestCase):
 
             rendered = json.loads((output_dir / "dataset_states.json").read_text())
             self.assertEqual("Previous title", rendered[data_id]["title"])
+
+    def test_render_state_files_merges_error_result_as_empty_verification_flags(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            previous_dir = tmp_path / "previous"
+            output_dir = tmp_path / "out"
+            results = ResultStore(tmp_path / "results")
+            data_id = "esacci.TEST"
+            _write_json(
+                previous_dir / "dataset_states.json",
+                {
+                    data_id: {
+                        "data_type": "dataset",
+                        "verification_flags": ["open", "write_zarr"],
+                        "title": "Previous title",
+                        "var_names": ["a"],
+                    }
+                },
+            )
+            results.write_result(
+                BuilderResult(
+                    data_id=data_id,
+                    data_type="dataset",
+                    status="error",
+                    error={"type": "RuntimeError", "message": "broken"},
+                )
+            )
+
+            render_state_files(results, previous_dir, output_dir)
+
+            rendered = json.loads((output_dir / "dataset_states.json").read_text())
+            self.assertEqual([], rendered[data_id]["verification_flags"])
+            self.assertEqual("Previous title", rendered[data_id]["title"])
+            self.assertEqual(["a"], rendered[data_id]["var_names"])
+
+    def test_render_state_files_preserves_error_result_state_entry(self):
+        with TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir)
+            previous_dir = tmp_path / "previous"
+            output_dir = tmp_path / "out"
+            results = ResultStore(tmp_path / "results")
+            data_id = "esacci.TEST"
+            _write_json(
+                previous_dir / "dataset_states.json",
+                {
+                    data_id: {
+                        "data_type": "dataset",
+                        "verification_flags": ["open", "write_zarr"],
+                        "title": "Previous title",
+                    }
+                },
+            )
+            results.write_result(
+                BuilderResult(
+                    data_id=data_id,
+                    data_type="dataset",
+                    status="error",
+                    state_entry={
+                        "data_type": "dataset",
+                        "verification_flags": ["open"],
+                        "title": None,
+                    },
+                    error={"type": "RuntimeError", "message": "write failed"},
+                )
+            )
+
+            render_state_files(results, previous_dir, output_dir)
+
+            rendered = json.loads((output_dir / "dataset_states.json").read_text())
+            self.assertEqual(["open"], rendered[data_id]["verification_flags"])
+            self.assertEqual("Previous title", rendered[data_id]["title"])

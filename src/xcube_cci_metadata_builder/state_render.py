@@ -23,13 +23,19 @@ def load_previous_states(previous_states_dir: Path | str) -> dict[str, dict[str,
 
 
 def collect_generated_states(result_store: ResultStore) -> dict[str, dict[str, Any]]:
-    """Collect successful state entries from per-data-ID result files."""
+    """Collect state entries from per-data-ID result files."""
 
     generated = {data_type: {} for data_type in DATA_TYPES}
     for result in result_store.iter_results():
-        if result.status != "ok" or result.state_entry is None:
+        if result.state_entry is not None:
+            generated[result.data_type][result.data_id] = result.state_entry
             continue
-        generated[result.data_type][result.data_id] = result.state_entry
+        if result.status == "error":
+            generated[result.data_type][result.data_id] = {
+                "data_type": result.data_type,
+                "verification_flags": [],
+                "title": None,
+            }
     return generated
 
 

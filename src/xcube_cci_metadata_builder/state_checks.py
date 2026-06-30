@@ -24,6 +24,16 @@ class CheckTimeoutError(TimeoutError):
     """Raised when a single check exceeds its timeout."""
 
 
+class CheckFailedError(Exception):
+    """Raised after one or more non-fatal check steps failed."""
+
+    def __init__(self, state_entry: dict[str, Any], errors: list[dict[str, Any]]):
+        self.state_entry = state_entry
+        self.errors = errors
+        first_error = errors[0] if errors else {}
+        super().__init__(first_error.get("message", "Check failed."))
+
+
 @dataclass(frozen=True)
 class CheckConfig:
     """Configuration for one live data check."""
@@ -70,6 +80,20 @@ def check_data_id(
             status="ok",
             state_entry=state_entry,
         )
+    except CheckFailedError as exception:
+        first_error = exception.errors[0] if exception.errors else {}
+        return BuilderResult(
+            data_id=data_id,
+            data_type=data_type,
+            status="error",
+            state_entry=exception.state_entry,
+            error={
+                "type": first_error.get("type", type(exception).__name__),
+                "message": first_error.get("message", str(exception)),
+                "traceback": first_error.get("traceback", traceback.format_exc()),
+                "checks": exception.errors,
+            },
+        )
     except Exception as exception:
         return BuilderResult(
             data_id=data_id,
@@ -93,6 +117,15 @@ def _get_checker(data_type: str):
     raise ValueError(f"Unsupported data type: {data_type!r}")
 
 
+def _check_error(check_name: str, exception: Exception) -> dict[str, Any]:
+    return {
+        "check": check_name,
+        "type": type(exception).__name__,
+        "message": str(exception),
+        "traceback": traceback.format_exc(),
+    }
+
+
 def _check_dataset_like(
     store: Any, data_id: str, config: CheckConfig
 ) -> dict[str, Any]:
@@ -100,49 +133,72 @@ def _check_dataset_like(
     data_type = _descriptor_data_type(descriptor)
     open_params = _get_common_open_params(descriptor, config)
     flags: list[str] = []
+    errors: list[dict[str, Any]] = []
 
     with timeout(config.timeout_seconds):
         data = store.open_data(data_id, **open_params)
     try:
         data_for_checks = _as_dataset(data)
-        _assert_requested_variables(data_for_checks, open_params.get("variable_names", []))
-        flags.append("open")
-
-        time_range = get_array_time_range(descriptor, data_for_checks)
-        if time_range is not None:
-            params = dict(open_params)
-            params["time_range"] = time_range
-            with timeout(config.timeout_seconds):
-                temporal_data = store.open_data(data_id, **params)
+        try:
             _assert_requested_variables(
-                _as_dataset(temporal_data), params.get("variable_names", [])
+                data_for_checks, open_params.get("variable_names", [])
             )
-            flags.append("constrain_time")
+            flags.append("open")
+        except Exception as exception:
+            errors.append(_check_error("open", exception))
 
-        region = get_region(descriptor, config)
-        if region is not None:
-            params = dict(open_params)
-            params["bbox"] = region
+        try:
+            time_range = get_array_time_range(descriptor, data_for_checks)
+            if time_range is not None:
+                params = dict(open_params)
+                params["time_range"] = time_range
+                with timeout(config.timeout_seconds):
+                    temporal_data = store.open_data(data_id, **params)
+                try:
+                    _assert_requested_variables(
+                        _as_dataset(temporal_data), params.get("variable_names", [])
+                    )
+                    flags.append("constrain_time")
+                finally:
+                    _close_data(temporal_data)
+        except Exception as exception:
+            errors.append(_check_error("constrain_time", exception))
+
+        try:
+            region = get_region(descriptor, config)
+            if region is not None:
+                params = dict(open_params)
+                params["bbox"] = region
+                with timeout(config.timeout_seconds):
+                    spatial_data = store.open_data(data_id, **params)
+                try:
+                    _assert_requested_variables(
+                        _as_dataset(spatial_data), params.get("variable_names", [])
+                    )
+                    flags.append("constrain_region")
+                finally:
+                    _close_data(spatial_data)
+        except Exception as exception:
+            errors.append(_check_error("constrain_region", exception))
+
+        try:
+            write_data_obj = subset_dataset_like_for_write(data)
             with timeout(config.timeout_seconds):
-                spatial_data = store.open_data(data_id, **params)
-            _assert_requested_variables(
-                _as_dataset(spatial_data), params.get("variable_names", [])
-            )
-            flags.append("constrain_region")
-
-        with timeout(config.timeout_seconds):
-            write_zarr(data, data_id)
-        flags.append("write_zarr")
+                write_zarr(write_data_obj, data_id)
+            flags.append("write_zarr")
+        except Exception as exception:
+            errors.append(_check_error("write_zarr", exception))
     finally:
-        close = getattr(data, "close", None)
-        if close is not None:
-            close()
+        _close_data(data)
 
-    return {
+    state_entry = {
         "data_type": data_type,
         "verification_flags": flags,
         "title": _get_title(descriptor, store, data_id),
     }
+    if errors:
+        raise CheckFailedError(state_entry, errors)
+    return state_entry
 
 
 def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
@@ -151,54 +207,75 @@ def _check_vectordatacube(store: Any, data_id: str, config: CheckConfig) -> dict
     with timeout(config.timeout_seconds):
         data = store.open_data(data_id, **open_params)
     flags = ["open"]
+    errors: list[dict[str, Any]] = []
     try:
-        with timeout(config.timeout_seconds):
-            write_zarr(data, data_id)
-        flags.append("write_zarr")
+        try:
+            write_data_obj = subset_dataset_like_for_write(data)
+            with timeout(config.timeout_seconds):
+                write_zarr(write_data_obj, data_id)
+            flags.append("write_zarr")
+        except Exception as exception:
+            errors.append(_check_error("write_zarr", exception))
     finally:
-        close = getattr(data, "close", None)
-        if close is not None:
-            close()
-    return {
+        _close_data(data)
+    state_entry = {
         "data_type": VECTORDATACUBE,
         "verification_flags": flags,
         "title": _get_title(descriptor, store, data_id),
     }
+    if errors:
+        raise CheckFailedError(state_entry, errors)
+    return state_entry
 
 
 def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> dict[str, Any]:
     descriptor = store.describe_data(data_id=data_id, data_type=GEODATAFRAME)
     open_params = _get_geodataframe_open_params(descriptor, config)
     flags: list[str] = []
+    errors: list[dict[str, Any]] = []
 
     with timeout(config.timeout_seconds):
         gdf = store.open_data(data_id, **open_params)
     flags.append("open")
 
-    time_range = get_geodataframe_time_range(descriptor)
-    if time_range is not None:
-        params = dict(open_params)
-        params["time_range"] = time_range
-        with timeout(config.timeout_seconds):
-            gdf = store.open_data(data_id, **params)
-        flags.append("constrain_time")
+    try:
+        time_range = get_geodataframe_time_range(descriptor)
+        if time_range is not None:
+            params = dict(open_params)
+            params["time_range"] = time_range
+            with timeout(config.timeout_seconds):
+                gdf = store.open_data(data_id, **params)
+            flags.append("constrain_time")
+    except Exception as exception:
+        errors.append(_check_error("constrain_time", exception))
 
-    region = get_geodataframe_region(gdf, descriptor)
-    if region is not None:
-        params = dict(open_params)
-        params["bbox"] = region
-        with timeout(config.timeout_seconds):
-            store.open_data(data_id, **params)
-        flags.append("constrain_region")
+    try:
+        region = get_geodataframe_region(gdf, descriptor)
+        if region is not None:
+            params = dict(open_params)
+            params["bbox"] = region
+            with timeout(config.timeout_seconds):
+                store.open_data(data_id, **params)
+            flags.append("constrain_region")
+    except Exception as exception:
+        errors.append(_check_error("constrain_region", exception))
 
-    with timeout(config.timeout_seconds):
-        write_kml(gdf, data_id)
-    flags.append("write_kml")
-    return {
+    try:
+        write_gdf = subset_geodataframe_for_write(gdf)
+        with timeout(config.timeout_seconds):
+            write_kml(write_gdf, data_id)
+        flags.append("write_kml")
+    except Exception as exception:
+        errors.append(_check_error("write_kml", exception))
+
+    state_entry = {
         "data_type": GEODATAFRAME,
         "verification_flags": flags,
         "title": _get_title(descriptor, store, data_id),
     }
+    if errors:
+        raise CheckFailedError(state_entry, errors)
+    return state_entry
 
 
 def _get_common_open_params(descriptor: Any, config: CheckConfig) -> dict[str, Any]:
@@ -329,6 +406,51 @@ def _as_dataset(data: Any) -> Any:
         if keys:
             return data.get(keys[0]).to_dataset()
     return data
+
+
+def subset_dataset_like_for_write(data: Any) -> Any:
+    """Return a small local subset suitable for write verification."""
+
+    if hasattr(data, "children") and hasattr(data, "map_over_datasets"):
+        def subset_node(dataset):
+            subset = _subset_dataset_for_write(dataset)
+            return subset
+
+        return data.map_over_datasets(subset_node)
+
+    return _subset_dataset_for_write(data)
+
+
+def _subset_dataset_for_write(data: Any) -> Any:
+    subset = data
+
+    data_vars = list(getattr(subset, "data_vars", {}) or {})
+    if len(data_vars) > 2 and hasattr(subset, "__getitem__"):
+        subset = subset[data_vars[:2]]
+
+    dims = getattr(subset, "sizes", None) or getattr(subset, "dims", None) or {}
+    indexers = {
+        dim_name: slice(0, 10)
+        for dim_name, dim_size in dict(dims).items()
+        if dim_size is not None and dim_size > 10
+    }
+    if indexers and hasattr(subset, "isel"):
+        subset = subset.isel(indexers)
+    return subset
+
+
+def subset_geodataframe_for_write(gdf: Any) -> Any:
+    """Return a small local GeoDataFrame subset for write verification."""
+
+    if len(gdf) <= 10:
+        return gdf
+    return gdf.head(10)
+
+
+def _close_data(data: Any) -> None:
+    close = getattr(data, "close", None)
+    if close is not None:
+        close()
 
 
 def _assert_requested_variables(data: Any, variable_names: list[str]) -> None:
