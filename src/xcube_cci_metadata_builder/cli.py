@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from textwrap import dedent
 
+from .build_descriptors import build_descriptors
 from .state_checks import CheckConfig
 from .constants import DATA_TYPES
 from .result_store import ResultStore
@@ -155,6 +156,78 @@ def _add_run_checks_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(func=_run_checks)
 
 
+def _add_build_descriptors_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "build-descriptors",
+        help="describe data IDs and write descriptor artifacts directly to a registry",
+        description=(
+            "Describe matching xcube-cci ODP data IDs and write descriptor JSON "
+            "files directly to <registry-dir>/descriptors/<store-id>."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta build-descriptors \\
+                --registry-dir ../xcube-cci-registry
+
+              cci-meta build-descriptors \\
+                --registry-dir ../xcube-cci-registry \\
+                --data-types dataset \\
+                --name-pattern "LST.mon.*.v4"
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci",
+        help="xcube data store ID to describe (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help=(
+            "target registry repository; descriptors are written below "
+            "<registry-dir>/descriptors/<store-id>"
+        ),
+    )
+    parser.add_argument(
+        "--data-types",
+        type=_parse_data_types,
+        default=DATA_TYPES,
+        metavar="TYPES",
+        help=(
+            "comma-separated data types to describe; choices: "
+            "dataset, datatree, geodataframe, vectordatacube "
+            "(default: all)"
+        ),
+    )
+    parser.add_argument(
+        "--name-pattern",
+        help=(
+            "wildcard pattern for data IDs, for example 'LST.mon.*.v4'; "
+            "matches full IDs and contained ID fragments"
+        ),
+    )
+    parser.add_argument(
+        "--data-id",
+        dest="data_ids",
+        action="append",
+        metavar="ID",
+        help=(
+            "specific data ID to describe; may be supplied multiple times; "
+            "when set, listing all data IDs is skipped"
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="maximum number of descriptors to write, useful for trial runs",
+    )
+    parser.set_defaults(func=_build_descriptors)
+
+
 def _render_states(args: argparse.Namespace) -> int:
     written = render_state_files(
         result_store=ResultStore(args.results_dir),
@@ -191,6 +264,30 @@ def _run_checks(args: argparse.Namespace) -> int:
     return 1 if summary.errors else 0
 
 
+def _build_descriptors(args: argparse.Namespace) -> int:
+    from xcube.core.store import new_data_store
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    store = new_data_store(args.store_id)
+    summary = build_descriptors(
+        store=store,
+        registry_dir=args.registry_dir,
+        store_id=args.store_id,
+        data_types=args.data_types,
+        name_pattern=args.name_pattern,
+        data_ids=args.data_ids,
+        limit=args.limit,
+    )
+    print(f"described: {summary.described}")
+    print(f"skipped: {summary.skipped}")
+    print(f"errors: {summary.errors}")
+    return 1 if summary.errors else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cci-meta",
@@ -199,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
             """\
             common commands:
               cci-meta run-checks --results-dir work/results --limit 10
+              cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
               cci-meta run-checks --results-dir work/results --data-types geodataframe
               cci-meta render-states --results-dir work/results --previous-states-dir ../xcube-cci/xcube_cci/data --output-dir ../xcube-cci-registry/states
             """
@@ -208,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _add_run_checks_parser(subparsers)
     _add_render_states_parser(subparsers)
+    _add_build_descriptors_parser(subparsers)
     args = parser.parse_args(argv)
     return args.func(args)
 
