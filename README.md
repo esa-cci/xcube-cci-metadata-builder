@@ -96,6 +96,27 @@ Important `run-checks` options:
 - `--no-resume` to ignore existing result files
 - `--timeout <seconds>` for each live operation
 
+Build descriptor files directly in a registry checkout without running state
+checks:
+
+```bash
+cci-meta build-descriptors \
+  --registry-dir ../xcube-cci-registry
+```
+
+Restrict descriptor generation to selected data types and a wildcard pattern:
+
+```bash
+cci-meta build-descriptors \
+  --registry-dir ../xcube-cci-registry \
+  --data-types dataset \
+  --name-pattern "LST.mon.*.v4"
+```
+
+The command writes descriptor JSON files below
+`<registry-dir>/descriptors/<store-id>`, for example
+`../xcube-cci-registry/descriptors/esa-cci`.
+
 Render state files from persisted per-data-ID result files:
 
 ```bash
