@@ -272,7 +272,7 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> CheckR
         errors.append(_check_error("constrain_time", exception))
 
     try:
-        region = get_geodataframe_region(gdf, descriptor)
+        region = get_geodataframe_region(gdf[0:10], descriptor)
         if region is not None:
             params = dict(open_params)
             params["bbox"] = region
