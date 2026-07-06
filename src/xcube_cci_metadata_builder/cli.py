@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
+import selectors
+import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -13,6 +17,8 @@ from .constants import DATA_TYPES
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
 from .state_render import render_state_files
+
+DEFAULT_MAX_RESTARTS = 20
 
 
 def _parse_data_types(value: str) -> tuple[str, ...]:
@@ -153,6 +159,20 @@ def _add_run_checks_parser(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="re-check data IDs even if result files already exist",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=1,
+        help=(
+            "retries for transient live-operation timeouts and temporary "
+            "local-write cleanup failures (default: %(default)s)"
+        ),
+    )
+    parser.add_argument(
+        "--run-once",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     parser.set_defaults(func=_run_checks)
 
 
@@ -241,6 +261,9 @@ def _render_states(args: argparse.Namespace) -> int:
 
 
 def _run_checks(args: argparse.Namespace) -> int:
+    if not args.run_once and not args.no_resume:
+        return _run_checks_supervised(args)
+
     from xcube.core.store import new_data_store
 
     logging.basicConfig(
@@ -256,12 +279,119 @@ def _run_checks(args: argparse.Namespace) -> int:
         data_ids=args.data_ids,
         resume=not args.no_resume,
         limit=args.limit,
-        config=CheckConfig(timeout_seconds=args.timeout),
+        config=CheckConfig(
+            timeout_seconds=args.timeout,
+            retries=args.retries,
+        ),
     )
     print(f"checked: {summary.checked}")
     print(f"skipped: {summary.skipped}")
     print(f"errors: {summary.errors}")
     return 1 if summary.errors else 0
+
+
+def _run_checks_supervised(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    command = _run_checks_child_command(args)
+    restarts = 0
+    while True:
+        returncode, output = _run_streamed_child(command)
+        checked = _parse_count(output, "checked")
+        if checked is not None and not _should_continue_after_summary(
+            args,
+            returncode,
+            checked,
+        ):
+            return returncode
+
+        if checked is not None:
+            continue
+
+        restarts += 1
+        if restarts > DEFAULT_MAX_RESTARTS:
+            return returncode
+
+        logging.getLogger(__name__).warning(
+            "run-checks child exited with status %s; restarting (%s/%s)",
+            returncode,
+            restarts,
+            DEFAULT_MAX_RESTARTS,
+        )
+
+
+def _run_streamed_child(command: list[str]) -> tuple[int, str]:
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    selector = selectors.DefaultSelector()
+    assert process.stdout is not None
+    assert process.stderr is not None
+    selector.register(process.stdout, selectors.EVENT_READ, sys.stdout)
+    selector.register(process.stderr, selectors.EVENT_READ, sys.stderr)
+    output: list[str] = []
+    while selector.get_map():
+        for key, _ in selector.select():
+            line = key.fileobj.readline()
+            if line:
+                if key.data is sys.stdout:
+                    output.append(line)
+                print(line, end="", file=key.data)
+            else:
+                selector.unregister(key.fileobj)
+                key.fileobj.close()
+    return process.wait(), "".join(output)
+
+
+def _should_continue_after_summary(
+    args: argparse.Namespace,
+    returncode: int,
+    checked: int,
+) -> bool:
+    if returncode != 0:
+        return False
+    if args.limit is None:
+        return False
+    return checked > 0
+
+
+def _run_checks_child_command(args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "xcube_cci_metadata_builder.cli",
+        "run-checks",
+        "--store-id",
+        args.store_id,
+        "--results-dir",
+        str(args.results_dir),
+        "--data-types",
+        ",".join(args.data_types),
+        "--timeout",
+        str(args.timeout),
+        "--retries",
+        str(args.retries),
+        "--run-once",
+    ]
+    if args.limit is not None:
+        command.extend(["--limit", str(args.limit)])
+    for data_id in args.data_ids or ():
+        command.extend(["--data-id", data_id])
+    return command
+
+
+def _parse_count(output: str, name: str) -> int | None:
+    match = re.search(rf"^{re.escape(name)}:\s*(\d+)\s*$", output, re.MULTILINE)
+    if match is None:
+        return None
+    return int(match.group(1))
 
 
 def _build_descriptors(args: argparse.Namespace) -> int:

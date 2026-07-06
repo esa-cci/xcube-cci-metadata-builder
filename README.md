@@ -16,6 +16,11 @@ files. The same per-data-ID results may also carry descriptors from
 `describe_data()`, which can be rendered into the registry descriptor cache
 together with the matching state update.
 
+`run-checks` is resumable by default and runs its checks in a supervised child
+process. If a long run is killed before writing its final summary, the command
+restarts the child process and continues from the already persisted result
+files.
+
 ## CLI
 
 The package installs two equivalent command names:
@@ -88,6 +93,15 @@ cci-meta run-checks \
   --timeout 300
 ```
 
+Set the retry count for transient timeouts and temporary local-write cleanup
+failures:
+
+```bash
+cci-meta run-checks \
+  --results-dir work/results \
+  --retries 2
+```
+
 Important `run-checks` options:
 
 - `--data-types dataset,datatree,geodataframe,vectordatacube`
@@ -95,6 +109,7 @@ Important `run-checks` options:
 - `--limit <n>` for small trial runs
 - `--no-resume` to ignore existing result files
 - `--timeout <seconds>` for each live operation
+- `--retries <n>` for transient failures
 
 Build descriptor files directly in a registry checkout without running state
 checks:

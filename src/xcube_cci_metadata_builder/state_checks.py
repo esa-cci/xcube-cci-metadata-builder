@@ -47,6 +47,7 @@ class CheckConfig:
 
     timeout_seconds: int = TIMEOUT_SECONDS
     random_seed: int = 42
+    retries: int = 1
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,19 @@ def timeout(seconds: int) -> Iterator[None]:
     finally:
         signal.alarm(0)
         signal.signal(signal.SIGALRM, previous_handler)
+
+
+def run_with_timeout(operation, seconds: int, retries: int = 0):
+    """Run *operation* with timeout and retry transient timeout failures."""
+
+    attempts = retries + 1
+    for attempt in range(attempts):
+        try:
+            with timeout(seconds):
+                return operation()
+        except CheckTimeoutError:
+            if attempt + 1 >= attempts:
+                raise
 
 
 def check_data_id(
@@ -153,8 +167,11 @@ def _check_dataset_like(
     flags: list[str] = []
     errors: list[dict[str, Any]] = []
 
-    with timeout(config.timeout_seconds):
-        data = store.open_data(data_id, **open_params)
+    data = run_with_timeout(
+        lambda: store.open_data(data_id, **open_params),
+        config.timeout_seconds,
+        config.retries,
+    )
     try:
         data_for_checks = _as_dataset(data)
         try:
@@ -170,8 +187,11 @@ def _check_dataset_like(
             if time_range is not None:
                 params = dict(open_params)
                 params["time_range"] = time_range
-                with timeout(config.timeout_seconds):
-                    temporal_data = store.open_data(data_id, **params)
+                temporal_data = run_with_timeout(
+                    lambda: store.open_data(data_id, **params),
+                    config.timeout_seconds,
+                    config.retries,
+                )
                 try:
                     _assert_requested_variables(
                         _as_dataset(temporal_data), params.get("variable_names", [])
@@ -187,8 +207,11 @@ def _check_dataset_like(
             if region is not None:
                 params = dict(open_params)
                 params["bbox"] = region
-                with timeout(config.timeout_seconds):
-                    spatial_data = store.open_data(data_id, **params)
+                spatial_data = run_with_timeout(
+                    lambda: store.open_data(data_id, **params),
+                    config.timeout_seconds,
+                    config.retries,
+                )
                 try:
                     _assert_requested_variables(
                         _as_dataset(spatial_data), params.get("variable_names", [])
@@ -201,8 +224,15 @@ def _check_dataset_like(
 
         try:
             write_data_obj = subset_dataset_like_for_write(data)
-            with timeout(config.timeout_seconds):
-                write_zarr(write_data_obj, data_id)
+            run_with_timeout(
+                lambda: write_zarr(
+                    write_data_obj,
+                    data_id,
+                    retries=config.retries,
+                ),
+                config.timeout_seconds,
+                config.retries,
+            )
             flags.append("write_zarr")
         except Exception as exception:
             errors.append(_check_error("write_zarr", exception))
@@ -225,15 +255,25 @@ def _check_vectordatacube(
     descriptor = store.describe_data(data_id=data_id, data_type=VECTORDATACUBE)
     serialized_descriptor = descriptor_to_dict(descriptor)
     open_params = _get_common_open_params(descriptor, config)
-    with timeout(config.timeout_seconds):
-        data = store.open_data(data_id, **open_params)
+    data = run_with_timeout(
+        lambda: store.open_data(data_id, **open_params),
+        config.timeout_seconds,
+        config.retries,
+    )
     flags = ["open"]
     errors: list[dict[str, Any]] = []
     try:
         try:
             write_data_obj = subset_dataset_like_for_write(data)
-            with timeout(config.timeout_seconds):
-                write_zarr(write_data_obj, data_id)
+            run_with_timeout(
+                lambda: write_zarr(
+                    write_data_obj,
+                    data_id,
+                    retries=config.retries,
+                ),
+                config.timeout_seconds,
+                config.retries,
+            )
             flags.append("write_zarr")
         except Exception as exception:
             errors.append(_check_error("write_zarr", exception))
@@ -256,8 +296,11 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> CheckR
     flags: list[str] = []
     errors: list[dict[str, Any]] = []
 
-    with timeout(config.timeout_seconds):
-        gdf = store.open_data(data_id, **open_params)
+    gdf = run_with_timeout(
+        lambda: store.open_data(data_id, **open_params),
+        config.timeout_seconds,
+        config.retries,
+    )
     flags.append("open")
 
     try:
@@ -265,8 +308,11 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> CheckR
         if time_range is not None:
             params = dict(open_params)
             params["time_range"] = time_range
-            with timeout(config.timeout_seconds):
-                gdf = store.open_data(data_id, **params)
+            gdf = run_with_timeout(
+                lambda: store.open_data(data_id, **params),
+                config.timeout_seconds,
+                config.retries,
+            )
             flags.append("constrain_time")
     except Exception as exception:
         errors.append(_check_error("constrain_time", exception))
@@ -276,16 +322,26 @@ def _check_geodataframe(store: Any, data_id: str, config: CheckConfig) -> CheckR
         if region is not None:
             params = dict(open_params)
             params["bbox"] = region
-            with timeout(config.timeout_seconds):
-                store.open_data(data_id, **params)
+            run_with_timeout(
+                lambda: store.open_data(data_id, **params),
+                config.timeout_seconds,
+                config.retries,
+            )
             flags.append("constrain_region")
     except Exception as exception:
         errors.append(_check_error("constrain_region", exception))
 
     try:
         write_gdf = subset_geodataframe_for_write(gdf)
-        with timeout(config.timeout_seconds):
-            write_kml(write_gdf, data_id)
+        run_with_timeout(
+            lambda: write_kml(
+                write_gdf,
+                data_id,
+                retries=config.retries,
+            ),
+            config.timeout_seconds,
+            config.retries,
+        )
         flags.append("write_kml")
     except Exception as exception:
         errors.append(_check_error("write_kml", exception))
@@ -484,16 +540,28 @@ def _assert_requested_variables(data: Any, variable_names: list[str]) -> None:
         raise ValueError(f"Requested variables {variable_names!r} are not in dataset.")
 
 
-def write_zarr(data: Any, data_id: str) -> None:
+def write_zarr(data: Any, data_id: str, retries: int = 1) -> None:
     """Write *data* to a temporary local ECT store as Zarr."""
 
-    write_to_local_store(data, data_id, suffix=".zarr", format_id="zarr")
+    write_to_local_store(
+        data,
+        data_id,
+        suffix=".zarr",
+        format_id="zarr",
+        retries=retries,
+    )
 
 
-def write_kml(data: Any, data_id: str) -> None:
+def write_kml(data: Any, data_id: str, retries: int = 1) -> None:
     """Write *data* to a temporary local ECT store as KML."""
 
-    write_to_local_store(data, data_id, suffix=".kml", format_id="kml")
+    write_to_local_store(
+        data,
+        data_id,
+        suffix=".kml",
+        format_id="kml",
+        retries=retries,
+    )
 
 
 def write_to_local_store(
@@ -501,9 +569,26 @@ def write_to_local_store(
     data_id: str,
     suffix: str,
     format_id: str | None = None,
+    retries: int = 1,
 ) -> None:
     """Write *data* to a temporary local ECT file store."""
 
+    attempts = retries + 1
+    for attempt in range(attempts):
+        try:
+            _write_to_single_local_store(data, data_id, suffix, format_id)
+            return
+        except OSError as exception:
+            if not _is_directory_not_empty_error(exception) or attempt + 1 >= attempts:
+                raise
+
+
+def _write_to_single_local_store(
+    data: Any,
+    data_id: str,
+    suffix: str,
+    format_id: str | None = None,
+) -> None:
     local_data_id = f"{_safe_name(data_id)}{suffix}"
     with tempfile.TemporaryDirectory() as tmp_dir:
         if format_id == "kml":
@@ -529,6 +614,11 @@ def write_to_local_store(
                 )
         finally:
             remove_store(store_id, persist=False)
+
+
+def _is_directory_not_empty_error(exception: OSError) -> bool:
+    message = str(exception).lower()
+    return "directory not empty" in message or "directory not empty" in repr(exception).lower()
 
 
 def _ensure_ect_kml_accessor_registered() -> None:

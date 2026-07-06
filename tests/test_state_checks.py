@@ -9,12 +9,14 @@ from shapely.geometry import Point
 
 from xcube_cci_metadata_builder.state_checks import (
     CheckConfig,
+    CheckTimeoutError,
     _choose_variables,
     _get_common_open_params,
     _get_title,
     check_data_id,
     get_geodataframe_time_range,
     get_region,
+    run_with_timeout,
     subset_dataset_like_for_write,
     write_kml,
     write_to_local_store,
@@ -114,6 +116,36 @@ class StateChecksTest(TestCase):
 
         write_to_local_store(data, "esacci.TEST", ".zarr", "zarr")
 
+    def test_write_to_local_store_retries_non_empty_temp_directory(self):
+        calls = []
+
+        def write_once(data, data_id, suffix, format_id):
+            calls.append((data, data_id, suffix, format_id))
+            if len(calls) == 1:
+                raise OSError("Directory not empty")
+
+        with patch(
+            "xcube_cci_metadata_builder.state_checks._write_to_single_local_store",
+            side_effect=write_once,
+        ):
+            write_to_local_store(object(), "esacci.TEST", ".zarr", "zarr")
+
+        self.assertEqual(2, len(calls))
+
+    def test_run_with_timeout_retries_timeout_error(self):
+        calls = []
+
+        def operation():
+            calls.append(None)
+            if len(calls) == 1:
+                raise CheckTimeoutError("timeout")
+            return "ok"
+
+        result = run_with_timeout(operation, seconds=0, retries=1)
+
+        self.assertEqual("ok", result)
+        self.assertEqual(2, len(calls))
+
     def test_write_zarr_uses_local_ect_store(self):
         data = xr.Dataset({"a": ("x", [1, 2])})
 
@@ -204,7 +236,7 @@ class StateChecksTest(TestCase):
                 ds.attrs["open_params"] = dict(open_params)
                 return ds
 
-        def assert_write_subset(data, data_id):
+        def assert_write_subset(data, data_id: str, retries: int = 1):
             self.assertLessEqual(len(data.data_vars), 2)
             self.assertLessEqual(data.sizes["time"], 10)
             self.assertLessEqual(data.sizes["lat"], 10)
@@ -296,7 +328,7 @@ class StateChecksTest(TestCase):
                 gdf.attrs["open_params"] = dict(open_params)
                 return gdf
 
-        def assert_write_subset(data, data_id):
+        def assert_write_subset(data, data_id: str, retries: int = 1):
             self.assertEqual(10, len(data))
 
         store = Store()

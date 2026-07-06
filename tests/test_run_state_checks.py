@@ -92,9 +92,31 @@ class RunStateChecksTest(TestCase):
                     result_store=ResultStore(Path(tmp_dir)),
                     data_types=("dataset",),
                     limit=1,
-                )
+            )
 
             self.assertIn(
                 "Checking dataset data ID 1/2: id-1",
-                cm.output[0],
+                "\n".join(cm.output),
+            )
+
+    def test_run_state_checks_logs_skipped_results(self):
+        with TemporaryDirectory() as tmp_dir:
+            result_store = ResultStore(Path(tmp_dir))
+            store = _FakeStore()
+            run_state_checks(
+                store=store,
+                result_store=result_store,
+                data_types=("dataset",),
+            )
+
+            with self.assertLogs(run_state_checks_module.LOG, level="INFO") as cm:
+                summary = run_state_checks(
+                    store=store,
+                    result_store=result_store,
+                    data_types=("dataset",),
+                )
+
+            self.assertEqual(2, summary.skipped)
+            self.assertTrue(
+                any("Skipped 1 existing result(s)" in item for item in cm.output)
             )

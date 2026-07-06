@@ -40,11 +40,20 @@ def run_state_checks(
     for data_type in data_types:
         ids_for_type = list(data_ids) if data_ids is not None else store.list_data_ids(data_type=data_type)
         total = len(ids_for_type)
+        LOG.info("Checking %s data IDs: %s total", data_type, total)
         for index, data_id in enumerate(ids_for_type, start=1):
             if limit is not None and checked >= limit:
                 return RunSummary(checked=checked, skipped=skipped, errors=errors)
             if resume and result_store.has_result(data_type, data_id):
                 skipped += 1
+                if skipped == 1 or skipped % 50 == 0 or index == total:
+                    LOG.info(
+                        "Skipped %s existing result(s); latest %s data ID %s/%s",
+                        skipped,
+                        data_type,
+                        index,
+                        total,
+                    )
                 continue
             LOG.info(
                 "Checking %s data ID %s/%s: %s",
