@@ -132,6 +132,18 @@ The command writes descriptor JSON files below
 `<registry-dir>/descriptors/<store-id>`, for example
 `../xcube-cci-registry/descriptors/esa-cci`.
 
+Build `registry.json` entries for the ESA CCI ODP store from rendered registry
+artifacts:
+
+```bash
+cci-meta build-registry \
+  --registry-dir ../xcube-cci-registry
+```
+
+The command reads descriptor files from
+`<registry-dir>/descriptors/esa-cci`, reads rendered state files from
+`<registry-dir>/states`, and writes `<registry-dir>/registry.json`.
+
 Render state files from persisted per-data-ID result files:
 
 ```bash

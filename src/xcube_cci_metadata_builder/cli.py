@@ -12,10 +12,11 @@ from pathlib import Path
 from textwrap import dedent
 
 from .build_descriptors import build_descriptors
-from .state_checks import CheckConfig
 from .constants import DATA_TYPES
+from .registry_build import build_esa_cci_registry
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
+from .state_checks import CheckConfig
 from .state_render import render_state_files
 
 DEFAULT_MAX_RESTARTS = 20
@@ -248,6 +249,37 @@ def _add_build_descriptors_parser(subparsers: argparse._SubParsersAction) -> Non
     parser.set_defaults(func=_build_descriptors)
 
 
+def _add_build_registry_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "build-registry",
+        help="build registry.json from rendered registry artifacts",
+        description=(
+            "Build registry.json entries for the ESA CCI ODP store from "
+            "descriptor artifacts and rendered state files in a registry checkout."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta build-registry \\
+                --registry-dir ../xcube-cci-registry
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="target registry repository containing descriptors/ and states/",
+    )
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci",
+        help="store ID whose descriptors should be registered (default: %(default)s)",
+    )
+    parser.set_defaults(func=_build_registry)
+
+
 def _render_states(args: argparse.Namespace) -> int:
     written = render_state_files(
         result_store=ResultStore(args.results_dir),
@@ -418,6 +450,16 @@ def _build_descriptors(args: argparse.Namespace) -> int:
     return 1 if summary.errors else 0
 
 
+def _build_registry(args: argparse.Namespace) -> int:
+    summary = build_esa_cci_registry(
+        registry_dir=args.registry_dir,
+        store_id=args.store_id,
+    )
+    print(f"entries: {summary.entries}")
+    print(f"registry: {summary.output_path}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cci-meta",
@@ -427,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
             common commands:
               cci-meta run-checks --results-dir work/results --limit 10
               cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
+              cci-meta build-registry --registry-dir ../xcube-cci-registry
               cci-meta run-checks --results-dir work/results --data-types geodataframe
               cci-meta render-states --results-dir work/results --previous-states-dir ../xcube-cci/xcube_cci/data --output-dir ../xcube-cci-registry/states
             """
@@ -437,6 +480,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_run_checks_parser(subparsers)
     _add_render_states_parser(subparsers)
     _add_build_descriptors_parser(subparsers)
+    _add_build_registry_parser(subparsers)
     args = parser.parse_args(argv)
     return args.func(args)
 
