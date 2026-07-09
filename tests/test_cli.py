@@ -4,6 +4,10 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from xcube_cci_metadata_builder.cli import (
+    _build_kerchunk_descriptors,
+    _build_kerchunk_descriptors_child_command,
+    _build_kerchunk_descriptors_supervised,
+    _collect_kerchunk_refs,
     _parse_count,
     _run_checks,
     _run_checks_supervised,
@@ -45,6 +49,116 @@ class CliTest(TestCase):
         self.assertEqual(0, exit_code)
         run.assert_called_once()
 
+    def test_collect_kerchunk_refs_calls_builder(self):
+        with patch(
+            "xcube_cci_metadata_builder.cli.collect_kerchunk_references",
+        ) as collect:
+            collect.return_value.references = 2
+            collect.return_value.output_path = Path("work/refs.json")
+
+            exit_code = _collect_kerchunk_refs(
+                Namespace(
+                    output=Path("work/refs.json"),
+                    data_types=("dataset",),
+                    limit=2,
+                )
+            )
+
+        self.assertEqual(0, exit_code)
+        collect.assert_called_once_with(
+            output_path=Path("work/refs.json"),
+            data_types=("dataset",),
+            limit=2,
+        )
+
+    def test_build_kerchunk_descriptors_calls_builder(self):
+        with patch(
+            "xcube_cci_metadata_builder.cli.build_kerchunk_descriptors",
+        ) as build:
+            build.return_value.described = 2
+            build.return_value.skipped = 1
+            build.return_value.errors = 0
+
+            exit_code = _build_kerchunk_descriptors(
+                Namespace(
+                    references=Path("work/refs.json"),
+                    output_dir=Path("work/descriptors"),
+                    data_ids=["kc-1"],
+                    name_pattern="kc-*",
+                    limit=2,
+                    no_resume=True,
+                    run_once=True,
+                )
+            )
+
+        self.assertEqual(0, exit_code)
+        build.assert_called_once_with(
+            references_path=Path("work/refs.json"),
+            descriptors_dir=Path("work/descriptors"),
+            data_ids=["kc-1"],
+            name_pattern="kc-*",
+            limit=2,
+            resume=False,
+        )
+
+    def test_build_kerchunk_descriptors_uses_supervisor_by_default(self):
+        with patch(
+            "xcube_cci_metadata_builder.cli._build_kerchunk_descriptors_supervised",
+            return_value=0,
+        ) as run:
+            exit_code = _build_kerchunk_descriptors(_kerchunk_args())
+
+        self.assertEqual(0, exit_code)
+        run.assert_called_once()
+
+    def test_build_kerchunk_descriptors_child_command_keeps_resume_enabled(self):
+        command = _build_kerchunk_descriptors_child_command(
+            _kerchunk_args(
+                references=Path("work/refs.json"),
+                output_dir=Path("work/descriptors"),
+                data_ids=["kc-1"],
+                name_pattern="kc-*",
+                limit=2,
+            )
+        )
+
+        self.assertIn("build-kerchunk-descriptors", command)
+        self.assertIn("--run-once", command)
+        self.assertNotIn("--no-resume", command)
+        self.assertIn("--references", command)
+        self.assertIn("work/refs.json", command)
+        self.assertIn("--output-dir", command)
+        self.assertIn("work/descriptors", command)
+        self.assertIn("--data-id", command)
+        self.assertIn("kc-1", command)
+        self.assertIn("--name-pattern", command)
+        self.assertIn("kc-*", command)
+        self.assertIn("--limit", command)
+        self.assertIn("2", command)
+
+    def test_build_kerchunk_descriptors_supervisor_stops_after_summary(self):
+        with patch(
+            "xcube_cci_metadata_builder.cli._run_streamed_child",
+            return_value=(0, "described: 3\nskipped: 10\nerrors: 0\n"),
+        ) as run:
+            exit_code = _build_kerchunk_descriptors_supervised(_kerchunk_args())
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(1, run.call_count)
+
+    def test_build_kerchunk_descriptors_supervisor_restarts_without_summary(self):
+        with patch(
+            "xcube_cci_metadata_builder.cli._run_streamed_child",
+            side_effect=[
+                (-9, "Killed\n"),
+                (0, "described: 0\nskipped: 100\nerrors: 0\n"),
+            ],
+        ) as run:
+            exit_code = _build_kerchunk_descriptors_supervised(_kerchunk_args())
+
+        self.assertEqual(0, exit_code)
+        self.assertEqual(2, run.call_count)
+
     def test_supervisor_stops_after_child_summary_even_with_errors(self):
         with patch(
             "xcube_cci_metadata_builder.cli._run_streamed_child",
@@ -78,6 +192,20 @@ def _args(**overrides):
         "retries": 1,
         "limit": None,
         "data_ids": None,
+        "no_resume": False,
+        "run_once": False,
+    }
+    values.update(overrides)
+    return Namespace(**values)
+
+
+def _kerchunk_args(**overrides):
+    values = {
+        "references": Path("work/kerchunk_refs/esa-cci-kc-references.json"),
+        "output_dir": Path("work/kerchunk_descriptors/esa-cci-kc"),
+        "data_ids": None,
+        "name_pattern": None,
+        "limit": None,
         "no_resume": False,
         "run_once": False,
     }

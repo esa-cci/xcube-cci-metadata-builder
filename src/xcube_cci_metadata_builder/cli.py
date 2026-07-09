@@ -13,6 +13,8 @@ from textwrap import dedent
 
 from .build_descriptors import build_descriptors
 from .constants import DATA_TYPES
+from .kerchunk_descriptors import build_kerchunk_descriptors
+from .kerchunk_refs import KERCHUNK_DATA_TYPES, collect_kerchunk_references
 from .registry_build import build_esa_cci_registry
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
@@ -28,6 +30,16 @@ def _parse_data_types(value: str) -> tuple[str, ...]:
     if unknown:
         raise argparse.ArgumentTypeError(
             f"Unsupported data type(s): {', '.join(unknown)}"
+        )
+    return data_types
+
+
+def _parse_kerchunk_data_types(value: str) -> tuple[str, ...]:
+    data_types = tuple(item.strip() for item in value.split(",") if item.strip())
+    unknown = sorted(set(data_types).difference(KERCHUNK_DATA_TYPES))
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"Unsupported Kerchunk data type(s): {', '.join(unknown)}"
         )
     return data_types
 
@@ -280,6 +292,120 @@ def _add_build_registry_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.set_defaults(func=_build_registry)
 
 
+def _add_collect_kerchunk_refs_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "collect-kerchunk-refs",
+        help="collect ESA CCI Kerchunk reference paths from ODP",
+        description=(
+            "Collect Kerchunk reference paths from ODP and write an "
+            "intermediate JSON artifact for later Kerchunk descriptor builds."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta collect-kerchunk-refs
+
+              cci-meta collect-kerchunk-refs \\
+                --output work/kerchunk_refs/esa-cci-kc-references.json \\
+                --data-types dataset
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("work/kerchunk_refs/esa-cci-kc-references.json"),
+        help="output JSON file (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--data-types",
+        type=_parse_kerchunk_data_types,
+        default=KERCHUNK_DATA_TYPES,
+        metavar="TYPES",
+        help=(
+            "comma-separated data types to inspect; choices: "
+            "dataset, geodataframe, vectordatacube (default: all)"
+        ),
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="maximum number of references to write, useful for trial runs",
+    )
+    parser.set_defaults(func=_collect_kerchunk_refs)
+
+
+def _add_build_kerchunk_descriptors_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "build-kerchunk-descriptors",
+        help="build Kerchunk descriptor artifacts from collected references",
+        description=(
+            "Read a collected Kerchunk references JSON artifact, open each "
+            "reference with xarray, and write xcube descriptor JSON files to "
+            "a work directory."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta build-kerchunk-descriptors
+
+              cci-meta build-kerchunk-descriptors \\
+                --references work/kerchunk_refs/esa-cci-kc-references.json \\
+                --output-dir work/kerchunk_descriptors/esa-cci-kc \\
+                --name-pattern "ESACCI-SEALEVEL.*"
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--references",
+        type=Path,
+        default=Path("work/kerchunk_refs/esa-cci-kc-references.json"),
+        help="input Kerchunk references JSON file (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("work/kerchunk_descriptors/esa-cci-kc"),
+        help="directory where descriptor JSON files are written (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--name-pattern",
+        help=(
+            "wildcard pattern for Kerchunk data IDs, for example "
+            "'ESACCI-SEALEVEL.*'; matches full IDs and contained ID fragments"
+        ),
+    )
+    parser.add_argument(
+        "--data-id",
+        dest="data_ids",
+        action="append",
+        metavar="ID",
+        help="specific Kerchunk data ID to describe; may be supplied multiple times",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="maximum number of descriptors to write, useful for trial runs",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="rewrite descriptors even if output files already exist",
+    )
+    parser.add_argument(
+        "--run-once",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.set_defaults(func=_build_kerchunk_descriptors)
+
+
 def _render_states(args: argparse.Namespace) -> int:
     written = render_state_files(
         result_store=ResultStore(args.results_dir),
@@ -460,6 +586,93 @@ def _build_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+def _collect_kerchunk_refs(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    summary = collect_kerchunk_references(
+        output_path=args.output,
+        data_types=args.data_types,
+        limit=args.limit,
+    )
+    print(f"references: {summary.references}")
+    print(f"output: {summary.output_path}")
+    return 0
+
+
+def _build_kerchunk_descriptors(args: argparse.Namespace) -> int:
+    if not args.run_once and not args.no_resume:
+        return _build_kerchunk_descriptors_supervised(args)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    summary = build_kerchunk_descriptors(
+        references_path=args.references,
+        descriptors_dir=args.output_dir,
+        data_ids=args.data_ids,
+        name_pattern=args.name_pattern,
+        limit=args.limit,
+        resume=not args.no_resume,
+    )
+    print(f"described: {summary.described}")
+    print(f"skipped: {summary.skipped}")
+    print(f"errors: {summary.errors}")
+    return 1 if summary.errors else 0
+
+
+def _build_kerchunk_descriptors_supervised(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    command = _build_kerchunk_descriptors_child_command(args)
+    restarts = 0
+    while True:
+        returncode, output = _run_streamed_child(command)
+        described = _parse_count(output, "described")
+        if described is not None:
+            return returncode
+
+        restarts += 1
+        if restarts > DEFAULT_MAX_RESTARTS:
+            return returncode
+
+        logging.getLogger(__name__).warning(
+            "build-kerchunk-descriptors child exited with status %s; "
+            "restarting (%s/%s)",
+            returncode,
+            restarts,
+            DEFAULT_MAX_RESTARTS,
+        )
+
+
+def _build_kerchunk_descriptors_child_command(args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "xcube_cci_metadata_builder.cli",
+        "build-kerchunk-descriptors",
+        "--references",
+        str(args.references),
+        "--output-dir",
+        str(args.output_dir),
+        "--run-once",
+    ]
+    if args.name_pattern is not None:
+        command.extend(["--name-pattern", args.name_pattern])
+    if args.limit is not None:
+        command.extend(["--limit", str(args.limit)])
+    for data_id in args.data_ids or ():
+        command.extend(["--data-id", data_id])
+    return command
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="cci-meta",
@@ -468,6 +681,8 @@ def main(argv: list[str] | None = None) -> int:
             """\
             common commands:
               cci-meta run-checks --results-dir work/results --limit 10
+              cci-meta collect-kerchunk-refs
+              cci-meta build-kerchunk-descriptors
               cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
               cci-meta build-registry --registry-dir ../xcube-cci-registry
               cci-meta run-checks --results-dir work/results --data-types geodataframe
@@ -481,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
     _add_render_states_parser(subparsers)
     _add_build_descriptors_parser(subparsers)
     _add_build_registry_parser(subparsers)
+    _add_collect_kerchunk_refs_parser(subparsers)
+    _add_build_kerchunk_descriptors_parser(subparsers)
     args = parser.parse_args(argv)
     return args.func(args)
 

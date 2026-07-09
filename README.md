@@ -132,6 +132,40 @@ The command writes descriptor JSON files below
 `<registry-dir>/descriptors/<store-id>`, for example
 `../xcube-cci-registry/descriptors/esa-cci`.
 
+Collect Kerchunk reference paths from ODP into a work artifact:
+
+```bash
+cci-meta collect-kerchunk-refs \
+  --output work/kerchunk_refs/esa-cci-kc-references.json
+```
+
+The command writes one JSON object per Kerchunk reference, including the
+Kerchunk data ID, ODP data ID, data type, and reference path. These references
+are used later to build Kerchunk descriptors in a work directory before they
+are rendered into the registry.
+
+Build Kerchunk descriptors from collected references:
+
+```bash
+cci-meta build-kerchunk-descriptors \
+  --references work/kerchunk_refs/esa-cci-kc-references.json \
+  --output-dir work/kerchunk_descriptors/esa-cci-kc
+```
+
+Restrict Kerchunk descriptor generation to a wildcard pattern or explicit IDs:
+
+```bash
+cci-meta build-kerchunk-descriptors \
+  --name-pattern "ESACCI-SEALEVEL.*"
+```
+
+The command opens each reference with xarray's Kerchunk `reference://` mapper
+and writes xcube descriptor JSON files to the work directory. Existing
+descriptor files are skipped by default so interrupted runs can be resumed. The
+command also runs in a supervised child process by default; if the child process
+is killed before writing its final summary, it is restarted and continues from
+the descriptor files already written.
+
 Build `registry.json` entries for the ESA CCI ODP store from rendered registry
 artifacts:
 
