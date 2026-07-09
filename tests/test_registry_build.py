@@ -5,6 +5,7 @@ from unittest import TestCase
 
 from xcube_cci_metadata_builder.descriptors import safe_descriptor_file_name
 from xcube_cci_metadata_builder.registry_build import (
+    add_kerchunk_to_registry,
     add_supersession_links,
     build_esa_cci_registry,
     build_esa_cci_registry_entries,
@@ -109,6 +110,74 @@ class RegistryBuildTest(TestCase):
             self.assertEqual(1, registry["schema_version"])
             self.assertIn("generated_at", registry)
             self.assertEqual(data_id, registry["datasets"][0]["canonical_id"])
+
+    def test_add_kerchunk_to_registry_uses_only_existing_descriptors(self):
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            odp_data_id = "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.1-0.r1"
+            kerchunk_data_id = "ESACCI-TEST-NAME-1-0"
+            _write_json(
+                root / "registry.json",
+                {
+                    "schema_version": 1,
+                    "datasets": [
+                        {
+                            "canonical_id": odp_data_id,
+                            "collection_id": derive_collection_id(odp_data_id),
+                            "representations": [],
+                        }
+                    ],
+                },
+            )
+            _write_json(
+                root / "refs.json",
+                {
+                    "references": [
+                        {
+                            "data_id": kerchunk_data_id,
+                            "odp_data_id": odp_data_id,
+                            "data_type": "dataset",
+                            "reference_path": "https://example.com/ref.json",
+                        },
+                        {
+                            "data_id": "missing-descriptor",
+                            "odp_data_id": odp_data_id,
+                            "data_type": "dataset",
+                            "reference_path": "https://example.com/missing.json",
+                        },
+                    ]
+                },
+            )
+            _write_json(
+                root
+                / "work"
+                / safe_descriptor_file_name(kerchunk_data_id),
+                {"data_id": kerchunk_data_id, "data_type": "dataset"},
+            )
+
+            summary = add_kerchunk_to_registry(
+                registry_dir=root,
+                references_path=root / "refs.json",
+                descriptors_dir=root / "work",
+            )
+
+            registry = json.loads((root / "registry.json").read_text())
+            representation = registry["datasets"][0]["representations"][0]
+            self.assertEqual(1, summary.representations)
+            self.assertEqual(1, summary.skipped)
+            self.assertEqual("esa-cci-kc", representation["store_id"])
+            self.assertEqual(kerchunk_data_id, representation["data_id"])
+            self.assertEqual(
+                "https://example.com/ref.json",
+                representation["reference_path"],
+            )
+            descriptor_path = (
+                root
+                / "descriptors"
+                / "esa-cci-kc"
+                / safe_descriptor_file_name(kerchunk_data_id)
+            )
+            self.assertTrue(descriptor_path.is_file())
 
     def test_derive_collection_id_keeps_non_version_suffix(self):
         self.assertEqual(

@@ -166,6 +166,18 @@ command also runs in a supervised child process by default; if the child process
 is killed before writing its final summary, it is restarted and continues from
 the descriptor files already written.
 
+Copy available Kerchunk descriptors into the registry and add Kerchunk
+representations to `registry.json`:
+
+```bash
+cci-meta add-kerchunk-to-registry \
+  --registry-dir ../xcube-cci-registry \
+  --references work/kerchunk_refs/esa-cci-kc-references.json \
+  --descriptors-dir work/kerchunk_descriptors/esa-cci-kc
+```
+
+Only references with an existing descriptor file are added to the registry.
+
 Build `registry.json` entries for the ESA CCI ODP store from rendered registry
 artifacts:
 

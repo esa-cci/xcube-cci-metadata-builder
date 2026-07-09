@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .constants import STATE_FILE_NAMES
+from .descriptors import safe_descriptor_file_name
 from .jsonio import read_json, write_json
 
 _VERSION_PREFIX_PATTERN = re.compile(r"^(?:ch\d*_v|ch|fv|v)", re.IGNORECASE)
@@ -21,6 +23,16 @@ class RegistryBuildSummary:
     """Summary of a registry build."""
 
     entries: int
+    output_path: Path
+
+
+@dataclass(frozen=True)
+class KerchunkRegistrySummary:
+    """Summary of Kerchunk registry integration."""
+
+    representations: int
+    descriptors: int
+    skipped: int
     output_path: Path
 
 
@@ -51,6 +63,76 @@ def build_esa_cci_registry(
         },
     )
     return RegistryBuildSummary(entries=len(datasets), output_path=output_path)
+
+
+def add_kerchunk_to_registry(
+    *,
+    registry_dir: Path | str,
+    references_path: Path | str,
+    descriptors_dir: Path | str,
+    store_id: str = "esa-cci-kc",
+) -> KerchunkRegistrySummary:
+    """Copy Kerchunk descriptors and add matching registry representations."""
+
+    root = Path(registry_dir)
+    registry_path = root / "registry.json"
+    registry = read_json(registry_path) if registry_path.is_file() else {}
+    datasets = registry.setdefault("datasets", [])
+    by_canonical_id = {
+        entry["canonical_id"]: entry
+        for entry in datasets
+        if isinstance(entry, dict) and "canonical_id" in entry
+    }
+
+    copied = 0
+    representations = 0
+    skipped = 0
+    target_descriptors_dir = root / "descriptors" / store_id
+    for reference in _read_kerchunk_references(references_path):
+        data_id = reference.get("data_id")
+        odp_data_id = reference.get("odp_data_id")
+        reference_path = reference.get("reference_path")
+        if not data_id or not odp_data_id or not reference_path:
+            skipped += 1
+            continue
+
+        source_descriptor = Path(descriptors_dir) / safe_descriptor_file_name(data_id)
+        if not source_descriptor.is_file():
+            skipped += 1
+            continue
+
+        target_descriptor = target_descriptors_dir / source_descriptor.name
+        target_descriptor.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_descriptor, target_descriptor)
+        copied += 1
+
+        descriptor = read_json(target_descriptor)
+        entry = by_canonical_id.get(odp_data_id)
+        if entry is None:
+            entry = _new_registry_entry(odp_data_id, descriptor)
+            datasets.append(entry)
+            by_canonical_id[odp_data_id] = entry
+
+        _set_kerchunk_representation(
+            entry=entry,
+            store_id=store_id,
+            data_id=data_id,
+            data_type=str(descriptor.get("data_type") or reference.get("data_type")),
+            reference_path=str(reference_path),
+            descriptor_path=target_descriptor,
+            registry_dir=root,
+        )
+        representations += 1
+
+    registry.setdefault("schema_version", 1)
+    registry["generated_at"] = _timestamp()
+    write_json(registry_path, registry)
+    return KerchunkRegistrySummary(
+        representations=representations,
+        descriptors=copied,
+        skipped=skipped,
+        output_path=registry_path,
+    )
 
 
 def build_esa_cci_registry_entries(
@@ -203,6 +285,65 @@ def _title(descriptor: dict[str, Any], state_entry: dict[str, Any]) -> str | Non
     attrs = descriptor.get("attrs") or {}
     title = attrs.get("title") or state_entry.get("title")
     return str(title) if title else None
+
+
+def _read_kerchunk_references(references_path: Path | str) -> list[dict[str, Any]]:
+    payload = read_json(Path(references_path))
+    references = payload.get("references")
+    if not isinstance(references, list):
+        raise ValueError(
+            f"Kerchunk references file has no references list: {references_path}"
+        )
+    return references
+
+
+def _new_registry_entry(
+    canonical_id: str,
+    descriptor: dict[str, Any],
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "canonical_id": canonical_id,
+        "collection_id": derive_collection_id(canonical_id),
+        "representations": [],
+    }
+    attrs = descriptor.get("attrs") or {}
+    title = attrs.get("title")
+    if title:
+        entry["title"] = str(title)
+    ecv = attrs.get("ecv")
+    if ecv:
+        entry["ecv"] = str(ecv)
+    version = attrs.get("product_version")
+    if version:
+        entry["version"] = str(version)
+    return entry
+
+
+def _set_kerchunk_representation(
+    *,
+    entry: dict[str, Any],
+    store_id: str,
+    data_id: str,
+    data_type: str,
+    reference_path: str,
+    descriptor_path: Path,
+    registry_dir: Path,
+) -> None:
+    representation = {
+        "store_id": store_id,
+        "data_id": data_id,
+        "data_type": data_type,
+        "reference_path": reference_path,
+        "descriptor_ref": _descriptor_ref(descriptor_path, registry_dir),
+        "descriptor_hash": _file_sha256(descriptor_path),
+    }
+    representations = [
+        item
+        for item in entry.setdefault("representations", [])
+        if not (item.get("store_id") == store_id and item.get("data_id") == data_id)
+    ]
+    representations.append(representation)
+    entry["representations"] = representations
 
 
 def _timestamp() -> str:

@@ -4,6 +4,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from xcube_cci_metadata_builder.cli import (
+    _add_kerchunk_to_registry,
     _build_kerchunk_descriptors,
     _build_kerchunk_descriptors_child_command,
     _build_kerchunk_descriptors_supervised,
@@ -69,6 +70,30 @@ class CliTest(TestCase):
             output_path=Path("work/refs.json"),
             data_types=("dataset",),
             limit=2,
+        )
+
+    def test_add_kerchunk_to_registry_calls_builder(self):
+        with patch("xcube_cci_metadata_builder.cli.add_kerchunk_to_registry") as add:
+            add.return_value.representations = 1
+            add.return_value.descriptors = 1
+            add.return_value.skipped = 0
+            add.return_value.output_path = Path("registry.json")
+
+            exit_code = _add_kerchunk_to_registry(
+                Namespace(
+                    registry_dir=Path("registry"),
+                    references=Path("refs.json"),
+                    descriptors_dir=Path("descriptors"),
+                    store_id="esa-cci-kc",
+                )
+            )
+
+        self.assertEqual(0, exit_code)
+        add.assert_called_once_with(
+            registry_dir=Path("registry"),
+            references_path=Path("refs.json"),
+            descriptors_dir=Path("descriptors"),
+            store_id="esa-cci-kc",
         )
 
     def test_build_kerchunk_descriptors_calls_builder(self):

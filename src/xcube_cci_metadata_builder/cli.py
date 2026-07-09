@@ -15,7 +15,7 @@ from .build_descriptors import build_descriptors
 from .constants import DATA_TYPES
 from .kerchunk_descriptors import build_kerchunk_descriptors
 from .kerchunk_refs import KERCHUNK_DATA_TYPES, collect_kerchunk_references
-from .registry_build import build_esa_cci_registry
+from .registry_build import add_kerchunk_to_registry, build_esa_cci_registry
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
 from .state_checks import CheckConfig
@@ -290,6 +290,54 @@ def _add_build_registry_parser(subparsers: argparse._SubParsersAction) -> None:
         help="store ID whose descriptors should be registered (default: %(default)s)",
     )
     parser.set_defaults(func=_build_registry)
+
+
+def _add_add_kerchunk_to_registry_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "add-kerchunk-to-registry",
+        help="copy Kerchunk descriptors and add registry representations",
+        description=(
+            "Read collected Kerchunk references and work-directory Kerchunk "
+            "descriptors, copy available descriptors into the registry, and "
+            "add esa-cci-kc representations to registry.json."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta add-kerchunk-to-registry \\
+                --registry-dir ../xcube-cci-registry \\
+                --references work/kerchunk_refs/esa-cci-kc-references.json \\
+                --descriptors-dir work/kerchunk_descriptors/esa-cci-kc
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="target registry repository containing registry.json",
+    )
+    parser.add_argument(
+        "--references",
+        type=Path,
+        default=Path("work/kerchunk_refs/esa-cci-kc-references.json"),
+        help="input Kerchunk references JSON file (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--descriptors-dir",
+        type=Path,
+        default=Path("work/kerchunk_descriptors/esa-cci-kc"),
+        help="work directory containing Kerchunk descriptor JSON files",
+    )
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci-kc",
+        help="registry store ID for Kerchunk representations (default: %(default)s)",
+    )
+    parser.set_defaults(func=_add_kerchunk_to_registry)
 
 
 def _add_collect_kerchunk_refs_parser(
@@ -586,6 +634,20 @@ def _build_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_kerchunk_to_registry(args: argparse.Namespace) -> int:
+    summary = add_kerchunk_to_registry(
+        registry_dir=args.registry_dir,
+        references_path=args.references,
+        descriptors_dir=args.descriptors_dir,
+        store_id=args.store_id,
+    )
+    print(f"representations: {summary.representations}")
+    print(f"descriptors: {summary.descriptors}")
+    print(f"skipped: {summary.skipped}")
+    print(f"registry: {summary.output_path}")
+    return 0
+
+
 def _collect_kerchunk_refs(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -683,6 +745,7 @@ def main(argv: list[str] | None = None) -> int:
               cci-meta run-checks --results-dir work/results --limit 10
               cci-meta collect-kerchunk-refs
               cci-meta build-kerchunk-descriptors
+              cci-meta add-kerchunk-to-registry --registry-dir ../xcube-cci-registry
               cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
               cci-meta build-registry --registry-dir ../xcube-cci-registry
               cci-meta run-checks --results-dir work/results --data-types geodataframe
@@ -696,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_render_states_parser(subparsers)
     _add_build_descriptors_parser(subparsers)
     _add_build_registry_parser(subparsers)
+    _add_add_kerchunk_to_registry_parser(subparsers)
     _add_collect_kerchunk_refs_parser(subparsers)
     _add_build_kerchunk_descriptors_parser(subparsers)
     args = parser.parse_args(argv)
