@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import logging
 import re
 import shutil
 from dataclasses import dataclass
@@ -11,9 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from .constants import STATE_FILE_NAMES
-from .descriptors import safe_descriptor_file_name
+from .descriptors import (
+    descriptor_to_dict,
+    safe_descriptor_file_name,
+    write_descriptor_file,
+)
 from .jsonio import read_json, write_json
 
+LOG = logging.getLogger(__name__)
 _VERSION_PREFIX_PATTERN = re.compile(r"^(?:ch\d*_v|ch|fv|v)", re.IGNORECASE)
 _VERSION_TOKEN_PATTERN = re.compile(r"\d+|[a-z]+", re.IGNORECASE)
 
@@ -33,6 +40,24 @@ class KerchunkRegistrySummary:
     representations: int
     descriptors: int
     skipped: int
+    output_path: Path
+
+
+@dataclass(frozen=True)
+class ZarrMapping:
+    """Mapping from a Zarr data ID to its canonical ESA CCI ID."""
+
+    data_id: str
+    canonical_id: str
+
+
+@dataclass(frozen=True)
+class ZarrRegistrySummary:
+    """Summary of a Zarr registry integration run."""
+
+    processed: int
+    described: int
+    errors: int
     output_path: Path
 
 
@@ -113,7 +138,7 @@ def add_kerchunk_to_registry(
             datasets.append(entry)
             by_canonical_id[odp_data_id] = entry
 
-        _set_kerchunk_representation(
+        _set_registry_representation(
             entry=entry,
             store_id=store_id,
             data_id=data_id,
@@ -133,6 +158,100 @@ def add_kerchunk_to_registry(
         skipped=skipped,
         output_path=registry_path,
     )
+
+
+def add_zarr_to_registry(
+    *,
+    store,
+    registry_dir: Path | str,
+    mapping_path: Path | str,
+    store_id: str = "esa-cci-zarr",
+) -> ZarrRegistrySummary:
+    """Build Zarr descriptors and add their representations to the registry."""
+
+    root = Path(registry_dir)
+    registry_path = root / "registry.json"
+    registry = read_json(registry_path) if registry_path.is_file() else {}
+    datasets = registry.setdefault("datasets", [])
+    by_canonical_id = {
+        entry["canonical_id"]: entry
+        for entry in datasets
+        if isinstance(entry, dict) and "canonical_id" in entry
+    }
+    descriptors_dir = root / "descriptors" / store_id
+    processed = 0
+    described = 0
+    errors = 0
+
+    for mapping in read_zarr_mappings(mapping_path):
+        LOG.info("Adding Zarr data ID: %s", mapping.data_id)
+        descriptor_path = descriptors_dir / safe_descriptor_file_name(mapping.data_id)
+        try:
+            if descriptor_path.is_file():
+                descriptor = read_json(descriptor_path)
+            else:
+                data_descriptor = store.describe_data(
+                    data_id=mapping.data_id,
+                    data_type="dataset",
+                )
+                descriptor = descriptor_to_dict(data_descriptor)
+                write_descriptor_file(
+                    descriptors_dir,
+                    mapping.data_id,
+                    descriptor,
+                )
+                described += 1
+
+            entry = by_canonical_id.get(mapping.canonical_id)
+            if entry is None:
+                entry = _new_registry_entry(mapping.canonical_id, descriptor)
+                datasets.append(entry)
+                by_canonical_id[mapping.canonical_id] = entry
+
+            _set_registry_representation(
+                entry=entry,
+                store_id=store_id,
+                data_id=mapping.data_id,
+                data_type=str(descriptor.get("data_type") or "dataset"),
+                descriptor_path=descriptor_path,
+                registry_dir=root,
+            )
+            add_supersession_links(datasets)
+            registry.setdefault("schema_version", 1)
+            registry["generated_at"] = _timestamp()
+            write_json(registry_path, registry)
+            processed += 1
+        except Exception:
+            LOG.exception("Failed adding Zarr data ID: %s", mapping.data_id)
+            errors += 1
+
+    return ZarrRegistrySummary(
+        processed=processed,
+        described=described,
+        errors=errors,
+        output_path=registry_path,
+    )
+
+
+def read_zarr_mappings(mapping_path: Path | str) -> list[ZarrMapping]:
+    """Read Zarr data IDs and canonical ESA CCI IDs from a CSV-like file."""
+
+    mappings = []
+    with Path(mapping_path).open("r", encoding="utf-8", newline="") as fp:
+        for line_number, row in enumerate(csv.reader(fp, skipinitialspace=True), 1):
+            if not row or all(not value.strip() for value in row):
+                continue
+            if len(row) != 2 or not row[0].strip() or not row[1].strip():
+                raise ValueError(
+                    f"Invalid Zarr mapping at line {line_number}: {row!r}"
+                )
+            mappings.append(
+                ZarrMapping(
+                    data_id=row[0].strip(),
+                    canonical_id=row[1].strip(),
+                )
+            )
+    return mappings
 
 
 def build_esa_cci_registry_entries(
@@ -319,24 +438,25 @@ def _new_registry_entry(
     return entry
 
 
-def _set_kerchunk_representation(
+def _set_registry_representation(
     *,
     entry: dict[str, Any],
     store_id: str,
     data_id: str,
     data_type: str,
-    reference_path: str,
     descriptor_path: Path,
     registry_dir: Path,
+    reference_path: str | None = None,
 ) -> None:
     representation = {
         "store_id": store_id,
         "data_id": data_id,
         "data_type": data_type,
-        "reference_path": reference_path,
         "descriptor_ref": _descriptor_ref(descriptor_path, registry_dir),
         "descriptor_hash": _file_sha256(descriptor_path),
     }
+    if reference_path is not None:
+        representation["reference_path"] = reference_path
     representations = [
         item
         for item in entry.setdefault("representations", [])

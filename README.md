@@ -178,6 +178,28 @@ cci-meta add-kerchunk-to-registry \
 
 Only references with an existing descriptor file are added to the registry.
 
+Build Zarr descriptors directly in the registry and add Zarr representations:
+
+```bash
+cci-meta add-zarr-to-registry \
+  --registry-dir ../xcube-cci-registry
+```
+
+By default, the command reads the `zarr_to_dsrids` mapping bundled with
+`xcube-cci-metadata-builder`. A different mapping can be supplied explicitly:
+
+```bash
+cci-meta add-zarr-to-registry \
+  --registry-dir ../xcube-cci-registry \
+  --mapping src/xcube_cci_metadata_builder/data/zarr_to_dsrids
+```
+
+The mapped ESA CCI ID is used as the canonical registry ID even when no ODP
+representation exists. Missing descriptors are written directly below
+`<registry-dir>/descriptors/esa-cci-zarr`. The registry is updated after every
+successful Zarr data ID. Existing descriptors are reused, and a supervised
+child process restarts the workflow after an abrupt termination.
+
 Build `registry.json` entries for the ESA CCI ODP store from rendered registry
 artifacts:
 

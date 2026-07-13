@@ -21,3 +21,6 @@ cci-meta = "xcube_cci_metadata_builder.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+xcube_cci_metadata_builder = ["data/*"]

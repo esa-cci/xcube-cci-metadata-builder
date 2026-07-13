@@ -15,7 +15,11 @@ from .build_descriptors import build_descriptors
 from .constants import DATA_TYPES
 from .kerchunk_descriptors import build_kerchunk_descriptors
 from .kerchunk_refs import KERCHUNK_DATA_TYPES, collect_kerchunk_references
-from .registry_build import add_kerchunk_to_registry, build_esa_cci_registry
+from .registry_build import (
+    add_kerchunk_to_registry,
+    add_zarr_to_registry,
+    build_esa_cci_registry,
+)
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
 from .state_checks import CheckConfig
@@ -340,6 +344,58 @@ def _add_add_kerchunk_to_registry_parser(
     parser.set_defaults(func=_add_kerchunk_to_registry)
 
 
+def _add_add_zarr_to_registry_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    parser = subparsers.add_parser(
+        "add-zarr-to-registry",
+        help="build Zarr descriptors and add registry representations",
+        description=(
+            "Read the bundled Zarr-to-ESA-CCI mapping, build missing Zarr "
+            "descriptors directly in the registry, and add esa-cci-zarr "
+            "representations to registry.json. Progress is persisted after "
+            "each data ID and interrupted runs are restarted automatically."
+        ),
+        epilog=dedent(
+            """\
+            examples:
+              cci-meta add-zarr-to-registry \\
+                --registry-dir ../xcube-cci-registry
+
+              cci-meta add-zarr-to-registry \\
+                --registry-dir ../xcube-cci-registry \\
+                --mapping src/xcube_cci_metadata_builder/data/zarr_to_dsrids
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="target registry repository containing registry.json",
+    )
+    parser.add_argument(
+        "--mapping",
+        type=Path,
+        help=(
+            "Zarr-to-ESA-CCI mapping file "
+            "(default: bundled metadata-builder mapping)"
+        ),
+    )
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci-zarr",
+        help="xcube and registry store ID (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--run-once",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.set_defaults(func=_add_zarr_to_registry)
+
+
 def _add_collect_kerchunk_refs_parser(
     subparsers: argparse._SubParsersAction,
 ) -> None:
@@ -648,6 +704,64 @@ def _add_kerchunk_to_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_zarr_to_registry(args: argparse.Namespace) -> int:
+    if not args.run_once:
+        return _add_zarr_to_registry_supervised(args)
+
+    from xcube.core.store import new_data_store
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    summary = add_zarr_to_registry(
+        store=new_data_store(args.store_id),
+        registry_dir=args.registry_dir,
+        mapping_path=args.mapping or _bundled_zarr_mapping_path(),
+        store_id=args.store_id,
+    )
+    print(f"processed: {summary.processed}")
+    print(f"described: {summary.described}")
+    print(f"errors: {summary.errors}")
+    print(f"registry: {summary.output_path}")
+    return 1 if summary.errors else 0
+
+
+def _add_zarr_to_registry_supervised(args: argparse.Namespace) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    return _run_resumable_command(
+        command=_add_zarr_to_registry_child_command(args),
+        summary_name="processed",
+        command_name="add-zarr-to-registry",
+    )
+
+
+def _add_zarr_to_registry_child_command(args: argparse.Namespace) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "xcube_cci_metadata_builder.cli",
+        "add-zarr-to-registry",
+        "--registry-dir",
+        str(args.registry_dir),
+        "--store-id",
+        args.store_id,
+        "--run-once",
+    ]
+    if args.mapping is not None:
+        command.extend(["--mapping", str(args.mapping)])
+    return command
+
+
+def _bundled_zarr_mapping_path() -> Path:
+    return Path(__file__).parent / "data" / "zarr_to_dsrids"
+
+
 def _collect_kerchunk_refs(args: argparse.Namespace) -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -693,12 +807,23 @@ def _build_kerchunk_descriptors_supervised(args: argparse.Namespace) -> int:
         format="[%(asctime)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    command = _build_kerchunk_descriptors_child_command(args)
+    return _run_resumable_command(
+        command=_build_kerchunk_descriptors_child_command(args),
+        summary_name="described",
+        command_name="build-kerchunk-descriptors",
+    )
+
+
+def _run_resumable_command(
+    *,
+    command: list[str],
+    summary_name: str,
+    command_name: str,
+) -> int:
     restarts = 0
     while True:
         returncode, output = _run_streamed_child(command)
-        described = _parse_count(output, "described")
-        if described is not None:
+        if _parse_count(output, summary_name) is not None:
             return returncode
 
         restarts += 1
@@ -706,8 +831,8 @@ def _build_kerchunk_descriptors_supervised(args: argparse.Namespace) -> int:
             return returncode
 
         logging.getLogger(__name__).warning(
-            "build-kerchunk-descriptors child exited with status %s; "
-            "restarting (%s/%s)",
+            "%s child exited with status %s; restarting (%s/%s)",
+            command_name,
             returncode,
             restarts,
             DEFAULT_MAX_RESTARTS,
@@ -746,6 +871,7 @@ def main(argv: list[str] | None = None) -> int:
               cci-meta collect-kerchunk-refs
               cci-meta build-kerchunk-descriptors
               cci-meta add-kerchunk-to-registry --registry-dir ../xcube-cci-registry
+              cci-meta add-zarr-to-registry --registry-dir ../xcube-cci-registry
               cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
               cci-meta build-registry --registry-dir ../xcube-cci-registry
               cci-meta run-checks --results-dir work/results --data-types geodataframe
@@ -760,6 +886,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_build_descriptors_parser(subparsers)
     _add_build_registry_parser(subparsers)
     _add_add_kerchunk_to_registry_parser(subparsers)
+    _add_add_zarr_to_registry_parser(subparsers)
     _add_collect_kerchunk_refs_parser(subparsers)
     _add_build_kerchunk_descriptors_parser(subparsers)
     args = parser.parse_args(argv)
