@@ -23,6 +23,8 @@ from .jsonio import read_json, write_json
 LOG = logging.getLogger(__name__)
 _VERSION_PREFIX_PATTERN = re.compile(r"^(?:ch\d*_v|ch|fv|v)", re.IGNORECASE)
 _VERSION_TOKEN_PATTERN = re.compile(r"\d+|[a-z]+", re.IGNORECASE)
+_CEDA_CATALOGUE_UUID_URL = "https://catalogue.ceda.ac.uk/uuid/{uuid}"
+_DEFAULT_CATALOG_URLS_PATH = Path(__file__).parent / "data" / "catalog_urls.json"
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ def build_esa_cci_registry(
     registry_dir: Path | str,
     store_id: str = "esa-cci",
     schema_version: int = 1,
+    catalog_urls_path: Path | str | None = None,
 ) -> RegistryBuildSummary:
     """Build ``registry.json`` entries for the ESA CCI ODP store."""
 
@@ -77,6 +80,7 @@ def build_esa_cci_registry(
         states=states,
         store_id=store_id,
         registry_dir=root,
+        catalog_urls=read_catalog_urls(catalog_urls_path),
     )
     output_path = root / "registry.json"
     write_json(
@@ -260,6 +264,7 @@ def build_esa_cci_registry_entries(
     states: dict[str, dict[str, Any]] | None = None,
     store_id: str = "esa-cci",
     registry_dir: Path | str | None = None,
+    catalog_urls: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build registry entries for descriptor files in *descriptors_dir*."""
 
@@ -297,8 +302,27 @@ def build_esa_cci_registry_entries(
         version = attrs.get("product_version")
         if version:
             entry["version"] = str(version)
+        catalog_url = _catalog_url(descriptor) or (catalog_urls or {}).get(data_id)
+        if catalog_url:
+            entry["catalog_url"] = catalog_url
         entries.append(entry)
     return add_supersession_links(entries)
+
+
+def read_catalog_urls(path: Path | str | None = None) -> dict[str, str]:
+    """Read non-empty curated catalogue URLs keyed by canonical data ID."""
+
+    lookup_path = Path(path) if path is not None else _DEFAULT_CATALOG_URLS_PATH
+    if not lookup_path.is_file():
+        return {}
+    values = read_json(lookup_path)
+    if not isinstance(values, dict):
+        raise ValueError(f"Catalogue URL lookup must be an object: {lookup_path}")
+    return {
+        str(data_id): str(catalog_url)
+        for data_id, catalog_url in values.items()
+        if catalog_url
+    }
 
 
 def add_supersession_links(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -406,6 +430,17 @@ def _title(descriptor: dict[str, Any], state_entry: dict[str, Any]) -> str | Non
     return str(title) if title else None
 
 
+def _catalog_url(descriptor: dict[str, Any]) -> str | None:
+    attrs = descriptor.get("attrs") or {}
+    catalog_url = attrs.get("catalog_url")
+    if catalog_url:
+        return str(catalog_url)
+    uuid = attrs.get("uuid")
+    if uuid:
+        return _CEDA_CATALOGUE_UUID_URL.format(uuid=uuid)
+    return None
+
+
 def _read_kerchunk_references(references_path: Path | str) -> list[dict[str, Any]]:
     payload = read_json(Path(references_path))
     references = payload.get("references")
@@ -435,6 +470,9 @@ def _new_registry_entry(
     version = attrs.get("product_version")
     if version:
         entry["version"] = str(version)
+    catalog_url = _catalog_url(descriptor)
+    if catalog_url:
+        entry["catalog_url"] = catalog_url
     return entry
 
 

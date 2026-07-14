@@ -11,6 +11,7 @@ from xcube_cci_metadata_builder.registry_build import (
     build_esa_cci_registry_entries,
     derive_collection_id,
     parse_version_sort_key,
+    read_catalog_urls,
 )
 
 
@@ -34,6 +35,7 @@ class RegistryBuildTest(TestCase):
                     "title": "Descriptor title",
                     "ecv": "AEROSOL",
                     "product_version": "1.7",
+                    "catalog_url": "https://catalogue.ceda.ac.uk/uuid/test-uuid",
                 },
             }
             descriptor_path = (
@@ -77,6 +79,10 @@ class RegistryBuildTest(TestCase):
             self.assertEqual("Descriptor title", entry["title"])
             self.assertEqual("AEROSOL", entry["ecv"])
             self.assertEqual("1.7", entry["version"])
+            self.assertEqual(
+                "https://catalogue.ceda.ac.uk/uuid/test-uuid",
+                entry["catalog_url"],
+            )
             representation = entry["representations"][0]
             self.assertEqual("esa-cci", representation["store_id"])
             self.assertEqual(data_id, representation["data_id"])
@@ -99,7 +105,10 @@ class RegistryBuildTest(TestCase):
                 {
                     "data_id": data_id,
                     "data_type": "dataset",
-                    "attrs": {"product_version": "1.0"},
+                    "attrs": {
+                        "product_version": "1.0",
+                        "uuid": "test-uuid",
+                    },
                 },
             )
 
@@ -110,6 +119,61 @@ class RegistryBuildTest(TestCase):
             self.assertEqual(1, registry["schema_version"])
             self.assertIn("generated_at", registry)
             self.assertEqual(data_id, registry["datasets"][0]["canonical_id"])
+            self.assertEqual(
+                "https://catalogue.ceda.ac.uk/uuid/test-uuid",
+                registry["datasets"][0]["catalog_url"],
+            )
+
+    def test_build_registry_allows_missing_catalog_url(self):
+        with TemporaryDirectory() as tmp_dir:
+            registry_dir = Path(tmp_dir)
+            data_id = "esacci.TEST.mon.L3.PRODUCT.sensor.platform.MERGED.1-0.r1"
+            _write_json(
+                registry_dir
+                / "descriptors"
+                / "esa-cci"
+                / safe_descriptor_file_name(data_id),
+                {"data_id": data_id, "data_type": "dataset"},
+            )
+
+            build_esa_cci_registry(registry_dir=registry_dir)
+
+            registry = json.loads((registry_dir / "registry.json").read_text())
+            self.assertNotIn("catalog_url", registry["datasets"][0])
+
+    def test_build_registry_uses_catalog_url_lookup(self):
+        with TemporaryDirectory() as tmp_dir:
+            registry_dir = Path(tmp_dir)
+            data_id = "esacci.TEST.mon.L3.PRODUCT.sensor.platform.MERGED.1-0.r1"
+            _write_json(
+                registry_dir
+                / "descriptors"
+                / "esa-cci"
+                / safe_descriptor_file_name(data_id),
+                {"data_id": data_id, "data_type": "dataset"},
+            )
+            lookup_path = registry_dir / "catalog_urls.json"
+            _write_json(lookup_path, {data_id: "https://example.com/catalog"})
+
+            build_esa_cci_registry(
+                registry_dir=registry_dir,
+                catalog_urls_path=lookup_path,
+            )
+
+            registry = json.loads((registry_dir / "registry.json").read_text())
+            self.assertEqual(
+                "https://example.com/catalog",
+                registry["datasets"][0]["catalog_url"],
+            )
+
+    def test_read_catalog_urls_ignores_empty_values(self):
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "catalog_urls.json"
+            _write_json(path, {"filled": "https://example.com", "empty": ""})
+
+            urls = read_catalog_urls(path)
+
+            self.assertEqual({"filled": "https://example.com"}, urls)
 
     def test_add_kerchunk_to_registry_uses_only_existing_descriptors(self):
         with TemporaryDirectory() as tmp_dir:

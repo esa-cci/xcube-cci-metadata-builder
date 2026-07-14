@@ -293,6 +293,14 @@ def _add_build_registry_parser(subparsers: argparse._SubParsersAction) -> None:
         default="esa-cci",
         help="store ID whose descriptors should be registered (default: %(default)s)",
     )
+    parser.add_argument(
+        "--catalog-urls",
+        type=Path,
+        help=(
+            "optional catalogue URL lookup JSON; defaults to the lookup "
+            "bundled with xcube-cci-metadata-builder"
+        ),
+    )
     parser.set_defaults(func=_build_registry)
 
 
@@ -684,6 +692,7 @@ def _build_registry(args: argparse.Namespace) -> int:
     summary = build_esa_cci_registry(
         registry_dir=args.registry_dir,
         store_id=args.store_id,
+        catalog_urls_path=args.catalog_urls,
     )
     print(f"entries: {summary.entries}")
     print(f"registry: {summary.output_path}")
