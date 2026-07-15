@@ -144,6 +144,7 @@ def add_kerchunk_to_registry(
 
         _set_registry_representation(
             entry=entry,
+            descriptor=descriptor,
             store_id=store_id,
             data_id=data_id,
             data_type=str(descriptor.get("data_type") or reference.get("data_type")),
@@ -214,6 +215,7 @@ def add_zarr_to_registry(
 
             _set_registry_representation(
                 entry=entry,
+                descriptor=descriptor,
                 store_id=store_id,
                 data_id=mapping.data_id,
                 data_type=str(descriptor.get("data_type") or "dataset"),
@@ -305,6 +307,7 @@ def build_esa_cci_registry_entries(
         catalog_url = _catalog_url(descriptor) or (catalog_urls or {}).get(data_id)
         if catalog_url:
             entry["catalog_url"] = catalog_url
+        _set_coverage(entry, descriptor)
         entries.append(entry)
     return add_supersession_links(entries)
 
@@ -473,12 +476,14 @@ def _new_registry_entry(
     catalog_url = _catalog_url(descriptor)
     if catalog_url:
         entry["catalog_url"] = catalog_url
+    _set_coverage(entry, descriptor)
     return entry
 
 
 def _set_registry_representation(
     *,
     entry: dict[str, Any],
+    descriptor: dict[str, Any],
     store_id: str,
     data_id: str,
     data_type: str,
@@ -495,6 +500,7 @@ def _set_registry_representation(
     }
     if reference_path is not None:
         representation["reference_path"] = reference_path
+    _set_coverage_overrides(representation, entry, descriptor)
     representations = [
         item
         for item in entry.setdefault("representations", [])
@@ -502,6 +508,24 @@ def _set_registry_representation(
     ]
     representations.append(representation)
     entry["representations"] = representations
+
+
+def _set_coverage(target: dict[str, Any], descriptor: dict[str, Any]) -> None:
+    for field in ("bbox", "time_range"):
+        value = descriptor.get(field)
+        if value is not None:
+            target[field] = value
+
+
+def _set_coverage_overrides(
+    representation: dict[str, Any],
+    entry: dict[str, Any],
+    descriptor: dict[str, Any],
+) -> None:
+    for field in ("bbox", "time_range"):
+        value = descriptor.get(field)
+        if value is not None and value != entry.get(field):
+            representation[field] = value
 
 
 def _timestamp() -> str:

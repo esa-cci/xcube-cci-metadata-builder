@@ -31,6 +31,8 @@ class RegistryBuildTest(TestCase):
             descriptor = {
                 "data_id": data_id,
                 "data_type": "dataset",
+                "bbox": [-10.0, -20.0, 30.0, 40.0],
+                "time_range": ["2001-01-01", "2020-12-31"],
                 "attrs": {
                     "title": "Descriptor title",
                     "ecv": "AEROSOL",
@@ -79,6 +81,10 @@ class RegistryBuildTest(TestCase):
             self.assertEqual("Descriptor title", entry["title"])
             self.assertEqual("AEROSOL", entry["ecv"])
             self.assertEqual("1.7", entry["version"])
+            self.assertEqual([-10.0, -20.0, 30.0, 40.0], entry["bbox"])
+            self.assertEqual(
+                ["2001-01-01", "2020-12-31"], entry["time_range"]
+            )
             self.assertEqual(
                 "https://catalogue.ceda.ac.uk/uuid/test-uuid",
                 entry["catalog_url"],
@@ -188,6 +194,8 @@ class RegistryBuildTest(TestCase):
                         {
                             "canonical_id": odp_data_id,
                             "collection_id": derive_collection_id(odp_data_id),
+                            "bbox": [-180.0, -90.0, 180.0, 90.0],
+                            "time_range": ["2000-01-01", "2020-12-31"],
                             "representations": [],
                         }
                     ],
@@ -216,7 +224,12 @@ class RegistryBuildTest(TestCase):
                 root
                 / "work"
                 / safe_descriptor_file_name(kerchunk_data_id),
-                {"data_id": kerchunk_data_id, "data_type": "dataset"},
+                {
+                    "data_id": kerchunk_data_id,
+                    "data_type": "dataset",
+                    "bbox": [-10.0, -20.0, 30.0, 40.0],
+                    "time_range": ["2000-01-01", "2019-12-31"],
+                },
             )
 
             summary = add_kerchunk_to_registry(
@@ -234,6 +247,11 @@ class RegistryBuildTest(TestCase):
             self.assertEqual(
                 "https://example.com/ref.json",
                 representation["reference_path"],
+            )
+            self.assertEqual([-10.0, -20.0, 30.0, 40.0], representation["bbox"])
+            self.assertEqual(
+                ["2000-01-01", "2019-12-31"],
+                representation["time_range"],
             )
             descriptor_path = (
                 root
