@@ -12,6 +12,7 @@ from pathlib import Path
 from textwrap import dedent
 
 from .build_descriptors import build_descriptors
+from .build_info import build_info
 from .constants import DATA_TYPES
 from .kerchunk_descriptors import build_kerchunk_descriptors
 from .kerchunk_refs import KERCHUNK_DATA_TYPES, collect_kerchunk_references
@@ -20,10 +21,12 @@ from .registry_build import (
     add_zarr_to_registry,
     build_esa_cci_registry,
 )
+from .registry_render import render_registry
 from .result_store import ResultStore
 from .run_state_checks import run_state_checks
 from .state_checks import CheckConfig
 from .state_render import render_state_files
+from .validation import validate_registry_artifacts
 
 DEFAULT_MAX_RESTARTS = 20
 
@@ -302,6 +305,84 @@ def _add_build_registry_parser(subparsers: argparse._SubParsersAction) -> None:
         ),
     )
     parser.set_defaults(func=_build_registry)
+
+
+def _add_build_info_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "build-info",
+        help="write build_info.json for the current registry artifacts",
+        description=(
+            "Record installed builder, xcube-cci, and xcube versions plus "
+            "artifact paths and counts for the current registry checkout."
+        ),
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="target registry repository",
+    )
+    parser.set_defaults(func=_build_info)
+
+
+def _add_validate_registry_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "validate-registry",
+        help="validate registry artifacts, descriptor references, and hashes",
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="registry repository to validate",
+    )
+    parser.set_defaults(func=_validate_registry)
+
+
+def _add_render_registry_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "render-registry",
+        help="render and validate the complete registry snapshot",
+        description=(
+            "Rebuild ESA CCI ODP, Kerchunk, and Zarr entries from their current "
+            "descriptor and mapping artifacts, write build_info.json, and "
+            "validate the resulting snapshot. No live data checks are run."
+        ),
+    )
+    parser.add_argument(
+        "--registry-dir",
+        required=True,
+        type=Path,
+        help="target registry repository containing descriptors/ and states/",
+    )
+    parser.add_argument(
+        "--store-id",
+        default="esa-cci",
+        help="base ODP store ID (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--catalog-urls",
+        type=Path,
+        help="optional catalogue URL lookup JSON",
+    )
+    parser.add_argument(
+        "--kerchunk-references",
+        type=Path,
+        default=Path("work/kerchunk_refs/esa-cci-kc-references.json"),
+        help="collected Kerchunk references JSON (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--kerchunk-descriptors-dir",
+        type=Path,
+        default=Path("work/kerchunk_descriptors/esa-cci-kc"),
+        help="freshly built Kerchunk descriptor work directory (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--zarr-mapping",
+        type=Path,
+        help="Zarr mapping file (default: bundled mapping)",
+    )
+    parser.set_defaults(func=_render_registry)
 
 
 def _add_add_kerchunk_to_registry_parser(
@@ -699,6 +780,38 @@ def _build_registry(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_info(args: argparse.Namespace) -> int:
+    summary = build_info(args.registry_dir)
+    print(f"build-info: {summary.output_path}")
+    return 0
+
+
+def _validate_registry(args: argparse.Namespace) -> int:
+    summary = validate_registry_artifacts(args.registry_dir)
+    print(f"datasets: {summary.datasets}")
+    print(f"representations: {summary.representations}")
+    print(f"states: {summary.states}")
+    print(f"descriptors: {summary.descriptors}")
+    return 0
+
+
+def _render_registry(args: argparse.Namespace) -> int:
+    summary = render_registry(
+        args.registry_dir,
+        kerchunk_references_path=args.kerchunk_references,
+        kerchunk_descriptors_dir=args.kerchunk_descriptors_dir,
+        zarr_mapping_path=args.zarr_mapping or _bundled_zarr_mapping_path(),
+        store_id=args.store_id,
+        catalog_urls_path=args.catalog_urls,
+    )
+    print(f"datasets: {summary.datasets}")
+    print(f"kerchunk-representations: {summary.kerchunk_representations}")
+    print(f"zarr-representations: {summary.zarr_representations}")
+    print(f"registry: {summary.registry_path}")
+    print(f"build-info: {summary.build_info_path}")
+    return 0
+
+
 def _add_kerchunk_to_registry(args: argparse.Namespace) -> int:
     summary = add_kerchunk_to_registry(
         registry_dir=args.registry_dir,
@@ -883,6 +996,8 @@ def main(argv: list[str] | None = None) -> int:
               cci-meta add-zarr-to-registry --registry-dir ../xcube-cci-registry
               cci-meta build-descriptors --registry-dir ../xcube-cci-registry --data-types dataset --name-pattern "LST.mon.*.v4"
               cci-meta build-registry --registry-dir ../xcube-cci-registry
+              cci-meta render-registry --registry-dir ../xcube-cci-registry
+              cci-meta validate-registry --registry-dir ../xcube-cci-registry
               cci-meta run-checks --results-dir work/results --data-types geodataframe
               cci-meta render-states --results-dir work/results --previous-states-dir ../xcube-cci/xcube_cci/data --output-dir ../xcube-cci-registry/states
             """
@@ -894,6 +1009,9 @@ def main(argv: list[str] | None = None) -> int:
     _add_render_states_parser(subparsers)
     _add_build_descriptors_parser(subparsers)
     _add_build_registry_parser(subparsers)
+    _add_build_info_parser(subparsers)
+    _add_validate_registry_parser(subparsers)
+    _add_render_registry_parser(subparsers)
     _add_add_kerchunk_to_registry_parser(subparsers)
     _add_add_zarr_to_registry_parser(subparsers)
     _add_collect_kerchunk_refs_parser(subparsers)

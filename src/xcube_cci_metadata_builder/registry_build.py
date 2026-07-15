@@ -69,6 +69,7 @@ def build_esa_cci_registry(
     store_id: str = "esa-cci",
     schema_version: int = 1,
     catalog_urls_path: Path | str | None = None,
+    generated_at: str | None = None,
 ) -> RegistryBuildSummary:
     """Build ``registry.json`` entries for the ESA CCI ODP store."""
 
@@ -87,7 +88,7 @@ def build_esa_cci_registry(
         output_path,
         {
             "schema_version": schema_version,
-            "generated_at": _timestamp(),
+            "generated_at": generated_at or _timestamp(),
             "datasets": datasets,
         },
     )
@@ -195,6 +196,8 @@ def add_zarr_to_registry(
             if descriptor_path.is_file():
                 descriptor = read_json(descriptor_path)
             else:
+                if store is None:
+                    raise ValueError(f"Missing Zarr descriptor: {descriptor_path}")
                 data_descriptor = store.describe_data(
                     data_id=mapping.data_id,
                     data_type="dataset",

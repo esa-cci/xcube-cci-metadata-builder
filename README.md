@@ -227,3 +227,35 @@ The render step preserves these curated fields from previous states:
 - `places`
 - `var_names`
 - `pattern`
+
+## Finalizing a registry snapshot
+
+After the long-running checks and descriptor builds have completed, render and
+validate the release snapshot without performing further data access:
+
+```bash
+cci-meta render-registry --registry-dir ../xcube-cci-registry
+```
+
+This rebuilds the ODP entries from the existing `esa-cci` descriptors, adds
+Kerchunk entries from the freshly collected references and work descriptors,
+adds Zarr entries from the bundled mapping and existing Zarr descriptors,
+writes `build_info.json`, and validates schemas, state files, descriptor
+references, and descriptor hashes. The previous `registry.json` is not used as
+an input.
+
+The default Kerchunk inputs are
+`work/kerchunk_refs/esa-cci-kc-references.json` and
+`work/kerchunk_descriptors/esa-cci-kc`. Alternate paths can be supplied with
+`--kerchunk-references` and `--kerchunk-descriptors-dir`.
+
+The final steps can also be run separately:
+
+```bash
+cci-meta build-info --registry-dir ../xcube-cci-registry
+cci-meta validate-registry --registry-dir ../xcube-cci-registry
+```
+
+`build_info.json` records the package versions from the active environment, so
+the command must be run in the environment containing the intended xcube-cci
+release.

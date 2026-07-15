@@ -8,15 +8,68 @@ from xcube_cci_metadata_builder.cli import (
     _build_kerchunk_descriptors,
     _build_kerchunk_descriptors_child_command,
     _build_kerchunk_descriptors_supervised,
+    _build_info,
     _collect_kerchunk_refs,
     _parse_count,
     _run_checks,
     _run_checks_supervised,
     _run_checks_child_command,
+    _render_registry,
+    _validate_registry,
 )
 
 
 class CliTest(TestCase):
+    def test_build_info_calls_builder(self):
+        with patch("xcube_cci_metadata_builder.cli.build_info") as build:
+            build.return_value.output_path = Path("registry/build_info.json")
+
+            exit_code = _build_info(Namespace(registry_dir=Path("registry")))
+
+        self.assertEqual(0, exit_code)
+        build.assert_called_once_with(Path("registry"))
+
+    def test_validate_registry_calls_validator(self):
+        with patch("xcube_cci_metadata_builder.cli.validate_registry_artifacts") as validate:
+            validate.return_value.datasets = 1
+            validate.return_value.representations = 2
+            validate.return_value.states = 3
+            validate.return_value.descriptors = 2
+
+            exit_code = _validate_registry(Namespace(registry_dir=Path("registry")))
+
+        self.assertEqual(0, exit_code)
+        validate.assert_called_once_with(Path("registry"))
+
+    def test_render_registry_calls_renderer(self):
+        with patch("xcube_cci_metadata_builder.cli.render_registry") as render:
+            render.return_value.datasets = 1
+            render.return_value.kerchunk_representations = 2
+            render.return_value.zarr_representations = 3
+            render.return_value.registry_path = Path("registry/registry.json")
+            render.return_value.build_info_path = Path("registry/build_info.json")
+
+            exit_code = _render_registry(
+                Namespace(
+                    registry_dir=Path("registry"),
+                    store_id="esa-cci",
+                    catalog_urls=None,
+                    kerchunk_references=Path("refs.json"),
+                    kerchunk_descriptors_dir=Path("kc-descriptors"),
+                    zarr_mapping=Path("zarr-mapping"),
+                )
+            )
+
+        self.assertEqual(0, exit_code)
+        render.assert_called_once_with(
+            Path("registry"),
+            kerchunk_references_path=Path("refs.json"),
+            kerchunk_descriptors_dir=Path("kc-descriptors"),
+            zarr_mapping_path=Path("zarr-mapping"),
+            store_id="esa-cci",
+            catalog_urls_path=None,
+        )
+
     def test_parse_count_reads_cli_summary_line(self):
         self.assertEqual(12, _parse_count("checked: 12\nskipped: 3\n", "checked"))
 
