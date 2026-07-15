@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xcube-cci-metadata-builder"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Build metadata artifacts for xcube-cci-registry"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,6 +23,9 @@ cci-meta = "xcube_cci_metadata_builder.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "xcube_cci_metadata_builder.version.__version__"}
 
 [tool.setuptools.package-data]
 xcube_cci_metadata_builder = ["data/*"]
