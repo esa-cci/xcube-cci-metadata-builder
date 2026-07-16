@@ -304,9 +304,9 @@ def build_esa_cci_registry_entries(
         ecv = attrs.get("ecv")
         if ecv:
             entry["ecv"] = str(ecv)
-        version = attrs.get("product_version")
+        version = normalize_version(_version_from_data_id(data_id))
         if version:
-            entry["version"] = str(version)
+            entry["version"] = version
         catalog_url = _catalog_url(descriptor) or (catalog_urls or {}).get(data_id)
         if catalog_url:
             entry["catalog_url"] = catalog_url
@@ -336,16 +336,38 @@ def add_supersession_links(entries: list[dict[str, Any]]) -> list[dict[str, Any]
 
     by_collection: dict[str, list[dict[str, Any]]] = {}
     for entry in entries:
+        version = normalize_version(_version_from_data_id(entry["canonical_id"]))
+        if version:
+            entry["version"] = version
         collection_id = entry["collection_id"]
         by_collection.setdefault(collection_id, []).append(entry)
 
-    for collection_entries in by_collection.values():
+    for collection_id, collection_entries in by_collection.items():
+        by_version: dict[str, list[str]] = {}
+        for entry in collection_entries:
+            version = entry.get("version")
+            if version:
+                by_version.setdefault(version, []).append(entry["canonical_id"])
+        duplicates = {
+            version: canonical_ids
+            for version, canonical_ids in by_version.items()
+            if len(canonical_ids) > 1
+        }
+        if duplicates:
+            details = "; ".join(
+                f"{version}: {', '.join(canonical_ids)}"
+                for version, canonical_ids in sorted(duplicates.items())
+            )
+            raise ValueError(
+                f"Duplicate normalized versions in collection {collection_id}: "
+                f"{details}"
+            )
         if len(collection_entries) < 2:
             continue
         sorted_entries = sorted(
             collection_entries,
             key=lambda entry: (
-                parse_version_sort_key(_version_from_data_id(entry["canonical_id"])),
+                parse_version_sort_key(entry.get("version", "")),
                 entry["canonical_id"],
             ),
         )
@@ -378,11 +400,17 @@ def derive_collection_id(data_id: str) -> str:
 def parse_version_sort_key(version: str) -> tuple[tuple[int, int | str], ...]:
     """Return a sortable key for ESA CCI version strings."""
 
-    normalized = version.strip().lower().strip("-_")
-    normalized = _VERSION_PREFIX_PATTERN.sub("", normalized).strip("-_")
-    normalized = normalized.replace("_seg", "-seg")
-    if normalized.isdigit() and len(normalized) == 4:
-        return ((0, int(normalized[:2])), (0, int(normalized[2:])))
+    normalized = _clean_version(version)
+    if not normalized:
+        return ()
+    if normalized.isdigit() and "-" not in normalized:
+        if len(normalized) == 4:
+            major = int(normalized[:2])
+            minor = int(normalized[2:])
+            if major == 0:
+                return ((0, minor),)
+            return ((0, major), (0, minor))
+        return ((0, int(normalized)),)
     tokens = []
     for token in _VERSION_TOKEN_PATTERN.findall(normalized):
         if token.isdigit():
@@ -390,6 +418,30 @@ def parse_version_sort_key(version: str) -> tuple[tuple[int, int | str], ...]:
         else:
             tokens.append((1, token))
     return tuple(tokens)
+
+
+def normalize_version(version: str) -> str:
+    """Return a user-facing dotted version derived from an ESA CCI version."""
+
+    sort_key = parse_version_sort_key(version)
+    numeric_parts = []
+    suffix_parts = []
+    for token_type, value in sort_key:
+        if token_type == 0 and not suffix_parts:
+            numeric_parts.append(str(value))
+        else:
+            suffix_parts.append(str(value))
+    if not numeric_parts:
+        return "".join(suffix_parts)
+    if len(numeric_parts) == 1 and not suffix_parts:
+        numeric_parts.append("0")
+    return ".".join(numeric_parts) + "".join(suffix_parts)
+
+
+def _clean_version(version: str) -> str:
+    normalized = version.strip().lower().strip("-_")
+    normalized = _VERSION_PREFIX_PATTERN.sub("", normalized).strip("-_")
+    return normalized.replace("_seg", "-seg")
 
 
 def _version_from_data_id(data_id: str) -> str:
@@ -473,9 +525,9 @@ def _new_registry_entry(
     ecv = attrs.get("ecv")
     if ecv:
         entry["ecv"] = str(ecv)
-    version = attrs.get("product_version")
+    version = normalize_version(_version_from_data_id(canonical_id))
     if version:
-        entry["version"] = str(version)
+        entry["version"] = version
     catalog_url = _catalog_url(descriptor)
     if catalog_url:
         entry["catalog_url"] = catalog_url

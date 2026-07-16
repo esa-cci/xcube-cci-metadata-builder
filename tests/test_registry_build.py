@@ -10,6 +10,7 @@ from xcube_cci_metadata_builder.registry_build import (
     build_esa_cci_registry,
     build_esa_cci_registry_entries,
     derive_collection_id,
+    normalize_version,
     parse_version_sort_key,
     read_catalog_urls,
 )
@@ -298,7 +299,7 @@ class RegistryBuildTest(TestCase):
             parse_version_sort_key("v2-2c"),
             parse_version_sort_key("v2-3-8"),
         )
-        self.assertLess(
+        self.assertGreater(
             parse_version_sort_key("fv0002"),
             parse_version_sort_key("fv0100"),
         )
@@ -310,6 +311,44 @@ class RegistryBuildTest(TestCase):
             parse_version_sort_key("04-01"),
             parse_version_sort_key("04-01_seg-"),
         )
+
+    def test_normalize_version_uses_public_dotted_format(self):
+        cases = {
+            "1-0": "1.0",
+            "v2-2c": "2.2c",
+            "4-0-1r": "4.0.1r",
+            "ch4_v1-2": "1.2",
+            "04-01_seg-": "4.1seg",
+            "fv0002": "2.0",
+            "v0001": "1.0",
+            "fv0100": "1.0",
+        }
+
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(expected, normalize_version(source))
+
+    def test_add_supersession_links_rejects_duplicate_normalized_versions(self):
+        collection_id = "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.r1"
+        entries = [
+            {
+                "canonical_id": (
+                    "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.01-00.r1"
+                ),
+                "collection_id": collection_id,
+                "representations": [],
+            },
+            {
+                "canonical_id": (
+                    "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.v1-0.r1"
+                ),
+                "collection_id": collection_id,
+                "representations": [],
+            },
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Duplicate normalized versions"):
+            add_supersession_links(entries)
 
     def test_add_supersession_links_connects_same_collection_versions(self):
         entries = [
@@ -333,6 +372,12 @@ class RegistryBuildTest(TestCase):
         linked = add_supersession_links(entries)
         by_id = {entry["canonical_id"]: entry for entry in linked}
 
+        self.assertEqual(
+            "2.2a",
+            by_id[
+                "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.v2-2a.r1"
+            ]["version"],
+        )
         self.assertEqual(
             "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.v2-2b.r1",
             by_id[
