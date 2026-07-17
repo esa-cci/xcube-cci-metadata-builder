@@ -18,7 +18,7 @@ from .registry_build import (
 )
 from .validation import ValidationSummary, validate_registry_artifacts
 
-DEFAULT_MAX_DESCRIPTOR_SIZE = 100 * 1024 * 1024
+DEFAULT_MAX_DESCRIPTOR_SIZE = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
