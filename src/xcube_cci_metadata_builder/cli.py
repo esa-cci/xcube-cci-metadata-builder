@@ -806,7 +806,9 @@ def _render_registry(args: argparse.Namespace) -> int:
     )
     print(f"datasets: {summary.datasets}")
     print(f"kerchunk-representations: {summary.kerchunk_representations}")
+    print(f"kerchunk-skipped: {summary.kerchunk_skipped}")
     print(f"zarr-representations: {summary.zarr_representations}")
+    print(f"zarr-skipped: {summary.zarr_skipped}")
     print(f"registry: {summary.registry_path}")
     print(f"build-info: {summary.build_info_path}")
     return 0
@@ -845,6 +847,7 @@ def _add_zarr_to_registry(args: argparse.Namespace) -> int:
     )
     print(f"processed: {summary.processed}")
     print(f"described: {summary.described}")
+    print(f"skipped: {summary.skipped}")
     print(f"errors: {summary.errors}")
     print(f"registry: {summary.output_path}")
     return 1 if summary.errors else 0

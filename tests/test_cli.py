@@ -45,7 +45,9 @@ class CliTest(TestCase):
         with patch("xcube_cci_metadata_builder.cli.render_registry") as render:
             render.return_value.datasets = 1
             render.return_value.kerchunk_representations = 2
+            render.return_value.kerchunk_skipped = 4
             render.return_value.zarr_representations = 3
+            render.return_value.zarr_skipped = 5
             render.return_value.registry_path = Path("registry/registry.json")
             render.return_value.build_info_path = Path("registry/build_info.json")
 

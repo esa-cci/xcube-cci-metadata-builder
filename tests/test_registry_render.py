@@ -66,6 +66,56 @@ class RegistryRenderTest(TestCase):
                 {"esa-cci", "esa-cci-kc", "esa-cci-zarr"}, store_ids
             )
 
+    def test_failed_render_does_not_modify_registry(self):
+        """Regression: a later render failure must not publish earlier changes."""
+
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            old_registry = {"datasets": [{"canonical_id": "existing-zarr-entry"}]}
+            old_build_info = {"generated_at": "previous-build"}
+            _write_json(root / "registry.json", old_registry)
+            _write_json(root / "build_info.json", old_build_info)
+            _write_descriptor(
+                root / "descriptors" / "esa-cci",
+                "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.1-0.r1",
+            )
+            _write_descriptor(root / "work" / "kc", "kerchunk-id")
+            references_path = root / "work" / "refs.json"
+            _write_json(
+                references_path,
+                {
+                    "references": [
+                        {
+                            "data_id": "kerchunk-id",
+                            "odp_data_id": "odp-id",
+                            "reference_path": "https://example.com/ref.json",
+                        }
+                    ]
+                },
+            )
+
+            with self.assertRaises(FileNotFoundError):
+                render_registry(
+                    root,
+                    kerchunk_references_path=references_path,
+                    kerchunk_descriptors_dir=root / "work" / "kc",
+                    zarr_mapping_path=root / "unused-zarr-mapping",
+                )
+
+            self.assertEqual(old_registry, json.loads((root / "registry.json").read_text()))
+            self.assertEqual(
+                old_build_info,
+                json.loads((root / "build_info.json").read_text()),
+            )
+            self.assertFalse(
+                (
+                    root
+                    / "descriptors"
+                    / "esa-cci-kc"
+                    / safe_descriptor_file_name("kerchunk-id")
+                ).exists()
+            )
+
 
 def _write_descriptor(directory: Path, data_id: str) -> None:
     _write_json(

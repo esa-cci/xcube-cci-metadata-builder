@@ -243,6 +243,8 @@ class RegistryBuildTest(TestCase):
             representation = registry["datasets"][0]["representations"][0]
             self.assertEqual(1, summary.representations)
             self.assertEqual(1, summary.skipped)
+            self.assertIn("missing-descriptor", summary.skipped_details[0])
+            self.assertIn("missing descriptor", summary.skipped_details[0])
             self.assertEqual("esa-cci-kc", representation["store_id"])
             self.assertEqual(kerchunk_data_id, representation["data_id"])
             self.assertEqual(

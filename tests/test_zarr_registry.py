@@ -75,6 +75,21 @@ class ZarrRegistryTest(TestCase):
             registry = json.loads((root / "registry.json").read_text())
             self.assertEqual(CANONICAL_ID, registry["datasets"][0]["canonical_id"])
 
+    def test_missing_descriptor_is_skipped_without_store(self):
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            mapping_path = _write_mapping(root, "missing.zarr")
+
+            summary = add_zarr_to_registry(
+                store=None,
+                registry_dir=root,
+                mapping_path=mapping_path,
+            )
+
+            self.assertEqual(1, summary.skipped)
+            self.assertEqual(0, summary.errors)
+            self.assertFalse((root / "registry.json").exists())
+
 
 def _write_mapping(root: Path, data_id: str) -> Path:
     path = root / "mapping"

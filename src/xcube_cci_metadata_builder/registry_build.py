@@ -43,6 +43,7 @@ class KerchunkRegistrySummary:
     descriptors: int
     skipped: int
     output_path: Path
+    skipped_details: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ class ZarrRegistrySummary:
 
     processed: int
     described: int
+    skipped: int
     errors: int
     output_path: Path
 
@@ -116,19 +118,25 @@ def add_kerchunk_to_registry(
 
     copied = 0
     representations = 0
-    skipped = 0
+    skipped_details = []
     target_descriptors_dir = root / "descriptors" / store_id
-    for reference in _read_kerchunk_references(references_path):
+    for index, reference in enumerate(_read_kerchunk_references(references_path)):
         data_id = reference.get("data_id")
         odp_data_id = reference.get("odp_data_id")
         reference_path = reference.get("reference_path")
         if not data_id or not odp_data_id or not reference_path:
-            skipped += 1
+            detail = (
+                f"reference {index}: missing data_id, odp_data_id, or reference_path"
+            )
+            skipped_details.append(detail)
+            LOG.warning("Skipping Kerchunk %s", detail)
             continue
 
         source_descriptor = Path(descriptors_dir) / safe_descriptor_file_name(data_id)
         if not source_descriptor.is_file():
-            skipped += 1
+            detail = f"{data_id}: missing descriptor {source_descriptor}"
+            skipped_details.append(detail)
+            LOG.warning("Skipping Kerchunk reference %s", detail)
             continue
 
         target_descriptor = target_descriptors_dir / source_descriptor.name
@@ -161,8 +169,9 @@ def add_kerchunk_to_registry(
     return KerchunkRegistrySummary(
         representations=representations,
         descriptors=copied,
-        skipped=skipped,
+        skipped=len(skipped_details),
         output_path=registry_path,
+        skipped_details=tuple(skipped_details),
     )
 
 
@@ -187,17 +196,24 @@ def add_zarr_to_registry(
     descriptors_dir = root / "descriptors" / store_id
     processed = 0
     described = 0
+    skipped = 0
     errors = 0
 
     for mapping in read_zarr_mappings(mapping_path):
         LOG.info("Adding Zarr data ID: %s", mapping.data_id)
         descriptor_path = descriptors_dir / safe_descriptor_file_name(mapping.data_id)
+        if not descriptor_path.is_file() and store is None:
+            LOG.warning(
+                "Skipping Zarr data ID %s: missing descriptor %s",
+                mapping.data_id,
+                descriptor_path,
+            )
+            skipped += 1
+            continue
         try:
             if descriptor_path.is_file():
                 descriptor = read_json(descriptor_path)
             else:
-                if store is None:
-                    raise ValueError(f"Missing Zarr descriptor: {descriptor_path}")
                 data_descriptor = store.describe_data(
                     data_id=mapping.data_id,
                     data_type="dataset",
@@ -237,6 +253,7 @@ def add_zarr_to_registry(
     return ZarrRegistrySummary(
         processed=processed,
         described=described,
+        skipped=skipped,
         errors=errors,
         output_path=registry_path,
     )
