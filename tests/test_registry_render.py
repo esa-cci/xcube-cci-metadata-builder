@@ -66,6 +66,57 @@ class RegistryRenderTest(TestCase):
                 {"esa-cci", "esa-cci-kc", "esa-cci-zarr"}, store_ids
             )
 
+    def test_oversized_descriptor_is_omitted_and_entry_survives_rerender(self):
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            data_id = "esacci.TEST.mon.L3.PROD.sensor.platform.NAME.1-0.r1"
+            descriptor_path = (
+                root
+                / "descriptors"
+                / "esa-cci"
+                / safe_descriptor_file_name(data_id)
+            )
+            _write_json(
+                descriptor_path,
+                {
+                    "data_id": data_id,
+                    "data_type": "dataset",
+                    "attrs": {"padding": "x" * 200},
+                },
+            )
+            references_path = root / "refs.json"
+            mapping_path = root / "zarr-mapping"
+            _write_json(references_path, {"references": []})
+            mapping_path.write_text("", encoding="utf-8")
+            _write_validation_inputs(root)
+
+            first = render_registry(
+                root,
+                kerchunk_references_path=references_path,
+                kerchunk_descriptors_dir=root / "kc",
+                zarr_mapping_path=mapping_path,
+                max_descriptor_size=100,
+            )
+            second = render_registry(
+                root,
+                kerchunk_references_path=references_path,
+                kerchunk_descriptors_dir=root / "kc",
+                zarr_mapping_path=mapping_path,
+                max_descriptor_size=100,
+            )
+
+            representation = json.loads(
+                (root / "registry.json").read_text()
+            )["datasets"][0]["representations"][0]
+            self.assertEqual(1, first.oversized_descriptors)
+            self.assertEqual(0, second.oversized_descriptors)
+            self.assertFalse(descriptor_path.exists())
+            self.assertNotIn("descriptor_ref", representation)
+            self.assertEqual(
+                "size_limit",
+                representation["descriptor_omitted_reason"],
+            )
+
     def test_failed_render_does_not_modify_registry(self):
         """Regression: a later render failure must not publish earlier changes."""
 

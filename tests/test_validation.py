@@ -37,6 +37,41 @@ class ValidationTest(TestCase):
             with self.assertRaisesRegex(ValueError, "Descriptor hash mismatch"):
                 validate_registry_artifacts(root)
 
+    def test_validation_accepts_descriptor_omitted_for_size(self):
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            descriptor = root / "descriptors" / "esa-cci" / "id.json"
+            _write_json(descriptor, {"data_id": "id"})
+            _write_minimal_artifacts(root, descriptor)
+            descriptor.unlink()
+            registry = json.loads((root / "registry.json").read_text())
+            representation = registry["datasets"][0]["representations"][0]
+            representation.pop("descriptor_ref")
+            representation.pop("descriptor_hash")
+            representation["descriptor_omitted_reason"] = "size_limit"
+            representation["descriptor_size"] = 200_000_000
+            _write_json(root / "registry.json", registry)
+
+            summary = validate_registry_artifacts(root)
+
+            self.assertEqual(1, summary.representations)
+            self.assertEqual(0, summary.descriptors)
+
+    def test_validation_rejects_unmarked_missing_descriptor(self):
+        with TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            descriptor = root / "descriptors" / "esa-cci" / "id.json"
+            _write_json(descriptor, {"data_id": "id"})
+            _write_minimal_artifacts(root, descriptor)
+            registry = json.loads((root / "registry.json").read_text())
+            representation = registry["datasets"][0]["representations"][0]
+            representation.pop("descriptor_ref")
+            representation.pop("descriptor_hash")
+            _write_json(root / "registry.json", registry)
+
+            with self.assertRaisesRegex(ValueError, "Missing descriptor_ref"):
+                validate_registry_artifacts(root)
+
 
 def _write_minimal_artifacts(root: Path, descriptor: Path) -> None:
     descriptor_hash = hashlib.sha256(descriptor.read_bytes()).hexdigest()

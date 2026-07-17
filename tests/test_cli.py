@@ -48,6 +48,7 @@ class CliTest(TestCase):
             render.return_value.kerchunk_skipped = 4
             render.return_value.zarr_representations = 3
             render.return_value.zarr_skipped = 5
+            render.return_value.oversized_descriptors = 6
             render.return_value.registry_path = Path("registry/registry.json")
             render.return_value.build_info_path = Path("registry/build_info.json")
 

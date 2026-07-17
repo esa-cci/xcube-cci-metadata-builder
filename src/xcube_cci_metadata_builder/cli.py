@@ -809,6 +809,7 @@ def _render_registry(args: argparse.Namespace) -> int:
     print(f"kerchunk-skipped: {summary.kerchunk_skipped}")
     print(f"zarr-representations: {summary.zarr_representations}")
     print(f"zarr-skipped: {summary.zarr_skipped}")
+    print(f"oversized-descriptors: {summary.oversized_descriptors}")
     print(f"registry: {summary.registry_path}")
     print(f"build-info: {summary.build_info_path}")
     return 0

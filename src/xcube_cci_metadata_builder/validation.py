@@ -56,6 +56,12 @@ def validate_registry_artifacts(registry_dir: Path | str) -> ValidationSummary:
             representations += 1
             descriptor_ref = representation.get("descriptor_ref")
             if not descriptor_ref:
+                if (
+                    representation.get("descriptor_omitted_reason") == "size_limit"
+                    and representation.get("descriptor_size", 0) > 0
+                    and "descriptor_hash" not in representation
+                ):
+                    continue
                 raise ValueError(
                     "Missing descriptor_ref for "
                     f"{representation['store_id']}:{representation['data_id']}"
